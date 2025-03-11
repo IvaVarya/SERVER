@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'auth_service'
+    static_configs:
+      - targets: ['auth_service:5001']
+
+  - job_name: 'profile_service'
+    static_configs:
+      - targets: ['profile_service:5002']
+
+  - job_name: 'post_service'
+    static_configs:
+      - targets: ['post_service:5003']

@@ -1,0 +1,110 @@
+version: '3.8'
+services:
+  auth_service:
+    build: ./auth_service
+    ports:
+      - "5001:5001"
+    environment:
+      - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+    depends_on:
+      - db
+    networks:
+      - backend
+
+  profile_service:
+    build: ./profile_service
+    ports:
+      - "5002:5002"
+    environment:
+      - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+    depends_on:
+      - db
+    volumes:
+      - ./uploads:/app/uploads
+    networks:
+      - backend
+
+  post_service:
+    build: ./post_service
+    ports:
+      - "5003:5003"
+    environment:
+      - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+    depends_on:
+      - db
+    volumes:
+      - ./uploads:/app/uploads
+    networks:
+      - backend
+
+  feed_service:
+    build: ./feed_service
+    ports:
+      - "5004:5004"
+    depends_on:
+      - post_service
+      - friend_service
+    networks:
+      - backend
+
+  friend_service:
+    build: ./friend_service
+    ports:
+      - "5005:5005"
+    environment:
+      - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+    depends_on:
+      - db
+    networks:
+      - backend
+
+  sets_service:
+    build: ./sets_service
+    ports:
+      - "5006:5006"
+    environment:
+      - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+    depends_on:
+      - db
+    volumes:
+      - ./uploads:/app/uploads
+    networks:
+      - backend
+
+  db:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=server
+      - POSTGRES_DB=PostgreSQL
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      - auth_service
+      - profile_service
+      - post_service
+      - feed_service
+      - friend_service
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+
+networks:
+  backend:
+    name: server_backend
+    driver: bridge

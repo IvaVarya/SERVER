@@ -1,0 +1,7 @@
+Flask
+Flask-SQLAlchemy
+psycopg2-binary
+pyjwt
+flask-restx
+prometheus_flask_exporter
+marshmallow
