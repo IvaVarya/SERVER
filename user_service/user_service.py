@@ -98,7 +98,7 @@ profile_model = api.model('Profile', {
     'gender': fields.String(required=False),
     'country': fields.String(required=False),
     'city': fields.String(required=False),
-    'birth_date': fields.Date(required=False),
+    'birth_date': fields.String(required=False, description='Date in YYYY-MM-DD format (e.g., "2003-02-01")'),
     'profile_photo': fields.String(required=False)
 })
 
@@ -112,7 +112,7 @@ user_response_model = api.model('UserResponse', {
     'gender': fields.String,
     'country': fields.String,
     'city': fields.String,
-    'birth_date': fields.Date,
+    'birth_date': fields.String(description='Date in YYYY-MM-DD format (e.g., "2003-02-01")'),
     'profile_photo': fields.String
 })
 
@@ -214,9 +214,11 @@ class Profile(Resource):
             current_user.city = data['city']
         if 'birth_date' in data:
             try:
-                current_user.birth_date = datetime.strptime(data['birth_date'], '%Y-%m-%d').date()
-            except ValueError:
-                return {'message': 'Некорректный формат даты (YYYY-MM-DD)'}, 400
+                # Преобразуем строку "YYYY-MM-DD" в объект date
+                birth_date_str = data['birth_date']
+                current_user.birth_date = datetime.datetime.strptime(birth_date_str, '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                return {'message': 'Некорректный формат даты, ожидается YYYY-MM-DD (например, "2003-02-01")'}, 400
 
         if 'profile_photo' in request.files:
             file = request.files['profile_photo']
@@ -244,7 +246,8 @@ class Profile(Resource):
             'gender': current_user.gender,
             'country': current_user.country,
             'city': current_user.city,
-            'birth_date': str(current_user.birth_date) if current_user.birth_date else None,
+            # Преобразуем объект date обратно в строку "YYYY-MM-DD" для клиента
+            'birth_date': current_user.birth_date.strftime('%Y-%m-%d') if current_user.birth_date else None,
             'profile_photo': current_user.profile_photo
         }, 200
 

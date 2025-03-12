@@ -14,5 +14,5 @@ class ProfileSchema(Schema):
     gender = fields.Str(validate=validate.Length(max=20))
     country = fields.Str(validate=validate.Length(max=50))
     city = fields.Str(validate=validate.Length(max=50))
-    birth_date = fields.Date(format='%Y-%m-%d')
+    birth_date = fields.Date(format='%Y-%m-%d')  # Ожидает строку "YYYY-MM-DD"
     profile_photo = fields.Str(validate=validate.Length(max=200))
