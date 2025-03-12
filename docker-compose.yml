@@ -1,7 +1,8 @@
 version: '3.8'
 services:
-  auth_service:
-    build: ./auth_service
+
+  user_service:
+    build: ./user_service
     ports:
       - "5001:5001"
     environment:
@@ -11,18 +12,29 @@ services:
     networks:
       - backend
 
-  profile_service:
-    build: ./profile_service
-    ports:
-      - "5002:5002"
-    environment:
-      - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
-    depends_on:
-      - db
-    volumes:
-      - ./uploads:/app/uploads
-    networks:
-      - backend
+  # auth_service:
+  #   build: ./auth_service
+  #   ports:
+  #     - "5001:5001"
+  #   environment:
+  #     - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+  #   depends_on:
+  #     - db
+  #   networks:
+  #     - backend
+
+  # profile_service:
+  #   build: ./profile_service
+  #   ports:
+  #     - "5002:5002"
+  #   environment:
+  #     - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+  #   depends_on:
+  #     - db
+  #   volumes:
+  #     - ./uploads:/app/uploads
+  #   networks:
+  #     - backend
 
   post_service:
     build: ./post_service
@@ -93,8 +105,9 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
     depends_on:
-      - auth_service
-      - profile_service
+      # - auth_service
+      # - profile_service
+      - user_service
       - post_service
       - feed_service
       - friend_service

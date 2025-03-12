@@ -5,3 +5,4 @@ pyjwt
 flask-restx
 prometheus_flask_exporter
 marshmallow
+flask_cors
