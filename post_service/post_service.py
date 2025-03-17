@@ -113,21 +113,31 @@ class CreatePost(Resource):
     @token_required
     @api.expect(post_model)
     def post(self, user_id):
-        data = request.form
+        # Проверяем, пришел ли запрос в формате JSON или multipart/form-data
+        if request.is_json:
+            data = request.get_json()
+            text = data.get('text', '')
+        else:
+            data = request.form
+            text = data.get('text', '')
+
+        # Валидация текста
         schema = PostSchema()
-        errors = schema.validate({'text': data.get('text', '')})
+        errors = schema.validate({'text': text})
         if errors:
             logger.warning(f'Validation errors: {errors}')
             return {'message': 'Ошибка валидации', 'errors': errors}, 400
 
-        text = data.get('text', '')
+        # Получение файлов (если есть)
         files = request.files.getlist('photos')
 
         try:
+            # Создание поста
             post = Post(user_id=user_id, text=text)
             db.session.add(post)
             db.session.commit()
 
+            # Обработка загруженных фотографий
             for file in files:
                 if file:
                     filename = secure_filename(file.filename)
