@@ -36,13 +36,41 @@ class Set(db.Model):
     name = db.Column(db.String(100), nullable=False)
     category = db.Column(db.String(50), nullable=False)
     description = db.Column(db.Text, nullable=False)
-    width = db.Column(db.Integer, nullable=False)  # Добавляем ширину
-    height = db.Column(db.Integer, nullable=False)  # Добавляем высоту
-    photo = db.Column(db.String(256))
+    width = db.Column(db.Integer, nullable=False)
+    height = db.Column(db.Integer, nullable=False)
+    photo = db.Column(db.String(256))  # Это поле будет хранить URL
 
-# Создание таблицы
+# Функция для инициализации базы данных с предопределёнными наборами
+def init_db():
+    if Set.query.count() == 0:
+        default_sets = [
+            Set(
+                manufacturer="DMC",
+                name="Цветочный сад",
+                category="Природа",
+                description="Набор для вышивания крестиком с изображением цветочного сада.",
+                width=150,
+                height=100,
+                photo="https://i.pinimg.com/736x/d6/5e/85/d65e859db614052853cc08f04999c6be.jpg"
+            ),
+            Set(
+                manufacturer="Riolis",
+                name="Зимний лес",
+                category="Пейзаж",
+                description="Зимний пейзаж с деревьями и снегом для вышивания крестиком.",
+                width=200,
+                height=150,
+                photo="https://cdn1.ozone.ru/s3/multimedia-6/c600/6289401306.jpg"
+            )
+        ]
+        db.session.bulk_save_objects(default_sets)
+        db.session.commit()
+        logger.info("Добавлены предопределённые наборы для вышивания с реальными изображениями.")
+
+# Создание таблицы и инициализация данных
 with app.app_context():
     db.create_all()
+    init_db()
 
 # Модель для Swagger
 set_model = api.model('Set', {
@@ -50,8 +78,8 @@ set_model = api.model('Set', {
     'name': fields.String(required=True, description='Название набора'),
     'category': fields.String(required=True, description='Категория'),
     'description': fields.String(required=True, description='Описание'),
-    'width': fields.Integer(required=True, description='Ширина в стежках'),  # Добавляем в Swagger
-    'height': fields.Integer(required=True, description='Высота в стежках')  # Добавляем в Swagger
+    'width': fields.Integer(required=True, description='Ширина в стежках'),
+    'height': fields.Integer(required=True, description='Высота в стежках')
 })
 
 # Эндпоинт для поиска
@@ -70,15 +98,15 @@ class SearchSets(Resource):
             'name': s.name,
             'category': s.category,
             'description': s.description,
-            'width': s.width,  # Добавляем в ответ
-            'height': s.height,  # Добавляем в ответ
-            'photo': s.photo
+            'width': s.width,
+            'height': s.height,
+            'photo': s.photo  # Здесь возвращается URL изображения
         } for s in sets], 200
 
 # Flask-Admin
 class SetAdmin(ModelView):
-    column_list = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']  # Добавляем в список колонок
-    form_columns = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']  # Добавляем в форму
+    column_list = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']
+    form_columns = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']
 
 admin = Admin(app, name='Sets Admin', template_mode='bootstrap3')
 admin.add_view(SetAdmin(Set, db.session))
