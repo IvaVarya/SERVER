@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from flask_restx import Api, Resource, fields
+from flask_restx import Api, Resource, fields, Namespace
 import jwt
 from functools import wraps
 from werkzeug.utils import secure_filename
@@ -22,9 +22,13 @@ logger = logging.getLogger(__name__)
 # Настройка Prometheus
 metrics = PrometheusMetrics(app)
 
-# Настройка Swagger с использованием Flask-RESTX
+# Настройка Swagger
 api = Api(app, version='1.0', title='Post Service API', 
           description='API для управления постами, лайками и комментариями.')
+
+# Отдельный Namespace для внутренних эндпоинтов (не отображается в Swagger)
+internal_ns = Namespace('internal', description='Внутренние эндпоинты (не для внешнего использования)')
+api.add_namespace(internal_ns)
 
 # Конфигурация приложения
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
@@ -34,7 +38,7 @@ app.config['UPLOAD_FOLDER'] = '/app/uploads'
 
 db = SQLAlchemy(app)
 
-# Модели базы данных
+# Модели базы данных (без изменений)
 class Post(db.Model):
     __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
@@ -65,13 +69,12 @@ class Comment(db.Model):
     text = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-# Создание таблиц и папки для загрузок
 with app.app_context():
     db.create_all()
     if not os.path.exists(app.config['UPLOAD_FOLDER']):
         os.makedirs(app.config['UPLOAD_FOLDER'])
 
-# Декоратор для проверки токена
+# Декораторы
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -90,7 +93,6 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# Декоратор для внутренних запросов
 def internal_only(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -101,16 +103,14 @@ def internal_only(f):
         return f(*args, **kwargs)
     return decorated
 
-# Модели для Swagger
+# Модели для Swagger (без изменений)
 post_model = api.model('PostModel', {
     'text': fields.String(required=False, description='Текст поста (опционально).'),
 })
-
 photo_model = api.model('Photo', {
     'id': fields.Integer(description='ID фотографии'),
     'filename': fields.String(description='Имя файла фотографии')
 })
-
 post_response_model = api.model('PostResponse', {
     'id': fields.Integer(description='ID поста'),
     'user_id': fields.Integer(description='ID пользователя'),
@@ -118,16 +118,13 @@ post_response_model = api.model('PostResponse', {
     'created_at': fields.String(description='Дата создания в формате ISO'),
     'photos': fields.List(fields.Nested(photo_model), description='Список фотографий')
 })
-
 like_model = api.model('LikeModel', {
     'post_id': fields.Integer(required=True, description='ID поста для лайка')
 })
-
 comment_model = api.model('CommentModel', {
     'post_id': fields.Integer(required=True, description='ID поста'),
     'text': fields.String(required=True, description='Текст комментария')
 })
-
 comment_response_model = api.model('CommentResponse', {
     'id': fields.Integer(description='ID комментария'),
     'user_id': fields.Integer(description='ID пользователя'),
@@ -135,7 +132,7 @@ comment_response_model = api.model('CommentResponse', {
     'created_at': fields.String(description='Дата создания в формате ISO')
 })
 
-# Создание поста
+# Публичные эндпоинты
 @api.route('/posts')
 class CreatePost(Resource):
     @token_required
@@ -164,12 +161,21 @@ class CreatePost(Resource):
             logger.error(f'Error creating post: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
 
-# Получение поста
 @api.route('/posts/<int:post_id>')
-class GetPost(Resource):
+class PostResource(Resource):
     @api.marshal_with(post_response_model)
-    @api.doc(responses={200: 'Успешно', 404: 'Пост не найден'})
+    @api.doc(responses={200: 'Успешно', 404: 'Пост не найден', 401: 'Неверный токен (если передан)'})
     def get(self, post_id):
+        token = request.headers.get('Authorization')
+        if token:
+            if token.startswith('Bearer '):
+                token = token.split(' ')[1]
+            try:
+                jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            except jwt.InvalidTokenError:
+                logger.warning(f'Invalid token provided for GET /posts/{post_id}')
+                return {'message': 'Неверный токен!'}, 401
+
         post = Post.query.get_or_404(post_id)
         return {
             'id': post.id,
@@ -179,9 +185,6 @@ class GetPost(Resource):
             'photos': [{'id': p.id, 'filename': p.filename} for p in post.photos]
         }
 
-# Удаление поста
-@api.route('/posts/<int:post_id>')
-class DeletePost(Resource):
     @token_required
     @api.doc(responses={200: 'Пост удален', 401: 'Токен неверный', 404: 'Пост не найден', 500: 'Ошибка сервера'})
     def delete(self, user_id, post_id):
@@ -202,12 +205,10 @@ class DeletePost(Resource):
             logger.error(f'Error deleting post: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
 
-# Лайк
 @api.route('/posts/like')
 class LikePost(Resource):
     @token_required
     @api.expect(like_model, validate=True)
-    @api.doc(responses={201: 'Лайк поставлен', 400: 'Лайк уже есть', 401: 'Токен неверный', 404: 'Пост не найден'})
     def post(self, user_id):
         data = request.get_json()
         post_id = data['post_id']
@@ -219,19 +220,15 @@ class LikePost(Resource):
             like = Like(user_id=user_id, post_id=post_id)
             db.session.add(like)
             db.session.commit()
-            logger.info(f'Post {post_id} liked by user_id: {user_id}')
             return {'message': 'Лайк успешно поставлен!'}, 201
         except Exception as e:
             db.session.rollback()
-            logger.error(f'Error liking post: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
 
-# Удаление лайка
 @api.route('/posts/unlike')
 class UnlikePost(Resource):
     @token_required
     @api.expect(like_model, validate=True)
-    @api.doc(responses={200: 'Лайк убран', 401: 'Токен неверный', 404: 'Лайк не найден'})
     def post(self, user_id):
         data = request.get_json()
         post_id = data['post_id']
@@ -241,19 +238,15 @@ class UnlikePost(Resource):
         try:
             db.session.delete(like)
             db.session.commit()
-            logger.info(f'Post {post_id} unliked by user_id: {user_id}')
             return {'message': 'Лайк успешно убран!'}, 200
         except Exception as e:
             db.session.rollback()
-            logger.error(f'Error unliking post: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
 
-# Комментарий
 @api.route('/posts/comment')
 class CommentPost(Resource):
     @token_required
     @api.expect(comment_model, validate=True)
-    @api.doc(responses={201: 'Комментарий добавлен', 401: 'Токен неверный', 404: 'Пост не найден'})
     def post(self, user_id):
         data = request.get_json()
         post_id = data['post_id']
@@ -264,18 +257,14 @@ class CommentPost(Resource):
             comment = Comment(user_id=user_id, post_id=post_id, text=text)
             db.session.add(comment)
             db.session.commit()
-            logger.info(f'Comment added to post {post_id} by user_id: {user_id}')
             return {'message': 'Комментарий успешно добавлен!', 'comment_id': comment.id}, 201
         except Exception as e:
             db.session.rollback()
-            logger.error(f'Error adding comment: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
 
-# Получение комментариев
 @api.route('/posts/<int:post_id>/comments')
 class GetComments(Resource):
     @api.marshal_with(comment_response_model, as_list=True)
-    @api.doc(responses={200: 'Успешно', 404: 'Пост не найден'})
     def get(self, post_id):
         if not Post.query.get(post_id):
             return {'message': 'Пост не найден'}, 404
@@ -287,11 +276,10 @@ class GetComments(Resource):
             'created_at': c.created_at.isoformat()
         } for c in comments]
 
-# Внутренний эндпоинт для получения постов по user_ids
-@api.route('/internal/posts/by_users')
+# Внутренний эндпоинт (в отдельном Namespace)
+@internal_ns.route('/posts/by_users')
 class GetPostsByUsersInternal(Resource):
     @internal_only
-    @api.doc(responses={200: 'Успешно', 400: 'Неверные параметры', 403: 'Доступ запрещен'})
     @api.marshal_with(post_response_model, as_list=True)
     def get(self):
         user_ids_str = request.args.get('user_ids', '')
