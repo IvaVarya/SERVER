@@ -160,15 +160,33 @@ class GetPost(Resource):
 @api.route('/posts/by_users')
 class GetPostsByUsers(Resource):
     def get(self):
-        user_ids = request.args.get('user_ids', '').split(',')
-        posts = Post.query.filter(Post.user_id.in_(user_ids)).order_by(Post.created_at.desc()).all()
-        return jsonify([{
-            'id': post.id,
-            'user_id': post.user_id,
-            'text': post.text,
-            'created_at': post.created_at.isoformat(),
-            'photos': [{'id': p.id, 'filename': p.filename} for p in post.photos]
-        } for post in posts])
+        try:
+            user_ids_str = request.args.get('user_ids', '')
+            if not user_ids_str:
+                return {'message': 'Параметр user_ids обязателен'}, 400
+            
+            # Преобразуем строки в целые числа, игнорируя некорректные значения
+            user_ids = []
+            for uid in user_ids_str.split(','):
+                try:
+                    user_ids.append(int(uid))
+                except ValueError:
+                    continue
+            
+            if not user_ids:
+                return {'message': 'Нет валидных user_ids'}, 400
+
+            posts = Post.query.filter(Post.user_id.in_(user_ids)).order_by(Post.created_at.desc()).all()
+            return [{
+                'id': post.id,
+                'user_id': post.user_id,
+                'text': post.text,
+                'created_at': post.created_at.isoformat(),
+                'photos': [{'id': p.id, 'filename': p.filename} for p in post.photos]
+            } for post in posts]
+        except Exception as e:
+            logger.error(f'Error in GetPostsByUsers: {str(e)}')
+            return {'message': 'Ошибка сервера'}, 500
 
 # Удаление поста
 @api.route('/posts/<int:post_id>')
@@ -192,6 +210,10 @@ class DeletePost(Resource):
             db.session.rollback()
             logger.error(f'Error deleting post: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
+
+    # Добавляем обработку OPTIONS для preflight-запросов
+    def options(self, post_id):
+        return {'message': 'OK'}, 200
 
 # Добавление лайка
 @api.route('/posts/like')
