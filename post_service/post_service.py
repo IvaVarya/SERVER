@@ -9,8 +9,12 @@ from functools import wraps
 from werkzeug.utils import secure_filename
 from prometheus_flask_exporter import PrometheusMetrics
 from schemas import PostSchema
+from flask_cors import CORS
 
 app = Flask(__name__)
+
+# Настройка CORS
+CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -78,6 +82,8 @@ def token_required(f):
         if not token:
             logger.warning('Token is missing!')
             return {'message': 'Токен отсутствует!'}, 401
+        if token.startswith('Bearer '):
+            token = token.split(' ')[1]
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             kwargs['user_id'] = data['user_id']
