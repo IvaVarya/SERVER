@@ -24,17 +24,19 @@ logger = logging.getLogger(__name__)
 metrics = PrometheusMetrics(app)
 
 # Настройка Swagger с использованием Flask-RESTX
-api = Api(app, version='1.0', title='Post Service API', description='API для управления постами, лайками и комментариями')
+api = Api(app, version='1.0', title='Post Service API', 
+          description='API для управления постами, лайками и комментариями. '
+                      'Все защищенные эндпоинты требуют заголовок Authorization с Bearer-токеном.')
 
 # Конфигурация приложения
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')  # Из переменной окружения
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 app.config['UPLOAD_FOLDER'] = '/app/uploads'
 
 db = SQLAlchemy(app)
 
-# Модель поста
+# Модели базы данных (без изменений)
 class Post(db.Model):
     __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
@@ -43,7 +45,6 @@ class Post(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     photos = db.relationship('Photo', backref='post', lazy=True)
 
-# Модель фотографии
 class Photo(db.Model):
     __tablename__ = 'photos'
     id = db.Column(db.Integer, primary_key=True)
@@ -51,7 +52,6 @@ class Photo(db.Model):
     filename = db.Column(db.String(255), nullable=False)
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-# Модель лайка
 class Like(db.Model):
     __tablename__ = 'likes'
     id = db.Column(db.Integer, primary_key=True)
@@ -59,7 +59,6 @@ class Like(db.Model):
     post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-# Модель комментария
 class Comment(db.Model):
     __tablename__ = 'comments'
     id = db.Column(db.Integer, primary_key=True)
@@ -74,7 +73,7 @@ with app.app_context():
     if not os.path.exists(app.config['UPLOAD_FOLDER']):
         os.makedirs(app.config['UPLOAD_FOLDER'])
 
-# Декоратор для проверки токена
+# Декоратор для проверки токена (без изменений)
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -93,27 +92,51 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# Модели для Swagger
+# Модели для Swagger с подробными описаниями
 post_model = api.model('PostModel', {
-    'text': fields.String(required=False, description='Текст поста'),
+    'text': fields.String(required=False, description='Текст поста (опционально). Максимальная длина - 5000 символов.'),
+    # Указываем, что можно загружать файлы через multipart/form-data
+}, description='Модель для создания поста. Поддерживает как JSON, так и multipart/form-data с полем "photos" для загрузки изображений.')
+
+photo_model = api.model('Photo', {
+    'id': fields.Integer(description='ID фотографии'),
+    'filename': fields.String(description='Имя файла фотографии')
+})
+
+post_response_model = api.model('PostResponse', {
+    'id': fields.Integer(description='ID поста'),
+    'user_id': fields.Integer(description='ID пользователя, создавшего пост'),
+    'text': fields.String(description='Текст поста'),
+    'created_at': fields.String(description='Дата создания поста в формате ISO'),
+    'photos': fields.List(fields.Nested(photo_model), description='Список загруженных фотографий')
 })
 
 like_model = api.model('LikeModel', {
-    'post_id': fields.Integer(required=True, description='ID поста')
-})
+    'post_id': fields.Integer(required=True, description='ID поста, который нужно лайкнуть/удалить лайк')
+}, description='Модель для добавления или удаления лайка.')
 
 comment_model = api.model('CommentModel', {
-    'post_id': fields.Integer(required=True, description='ID поста'),
-    'text': fields.String(required=True, description='Текст комментария')
+    'post_id': fields.Integer(required=True, description='ID поста, к которому добавляется комментарий'),
+    'text': fields.String(required=True, description='Текст комментария. Максимальная длина - 2000 символов.')
+}, description='Модель для добавления комментария.')
+
+comment_response_model = api.model('CommentResponse', {
+    'id': fields.Integer(description='ID комментария'),
+    'user_id': fields.Integer(description='ID пользователя, оставившего комментарий'),
+    'text': fields.String(description='Текст комментария'),
+    'created_at': fields.String(description='Дата создания комментария в формате ISO')
 })
 
 # Создание поста с загрузкой фотографий
 @api.route('/posts')
 class CreatePost(Resource):
     @token_required
-    @api.expect(post_model)
+    @api.expect(post_model, validate=True)
+    @api.doc(description='Создает новый пост. Поддерживает текст и загрузку фотографий. '
+                         'Принимает либо JSON с полем "text", либо multipart/form-data с полями "text" (опционально) и "photos" (файлы). '
+                         'Требуется заголовок Authorization с Bearer-токеном.',
+             responses={201: 'Пост успешно создан', 400: 'Ошибка валидации', 401: 'Токен отсутствует или неверный', 500: 'Ошибка сервера'})
     def post(self, user_id):
-        # Проверяем, пришел ли запрос в формате JSON или multipart/form-data
         if request.is_json:
             data = request.get_json()
             text = data.get('text', '')
@@ -121,23 +144,18 @@ class CreatePost(Resource):
             data = request.form
             text = data.get('text', '')
 
-        # Валидация текста
         schema = PostSchema()
         errors = schema.validate({'text': text})
         if errors:
             logger.warning(f'Validation errors: {errors}')
             return {'message': 'Ошибка валидации', 'errors': errors}, 400
 
-        # Получение файлов (если есть)
         files = request.files.getlist('photos')
-
         try:
-            # Создание поста
             post = Post(user_id=user_id, text=text)
             db.session.add(post)
             db.session.commit()
 
-            # Обработка загруженных фотографий
             for file in files:
                 if file:
                     filename = secure_filename(file.filename)
@@ -156,6 +174,9 @@ class CreatePost(Resource):
 # Получение поста
 @api.route('/posts/<int:post_id>')
 class GetPost(Resource):
+    @api.doc(description='Получает информацию о посте по его ID.',
+             responses={200: 'Успешно', 404: 'Пост не найден'})
+    @api.marshal_with(post_response_model)
     def get(self, post_id):
         post = Post.query.get_or_404(post_id)
         return {
@@ -167,15 +188,30 @@ class GetPost(Resource):
         }
 
 # Получение постов по user_ids
+# Получение постов по user_ids
 @api.route('/posts/by_users')
 class GetPostsByUsers(Resource):
+    @api.doc(description='Получает список постов для указанных пользователей. '
+                         'Параметр "user_ids" передается в query string как строка с ID пользователей, разделенными запятыми. '
+                         'Пример запроса: GET /posts/by_users?user_ids=1,2,3',
+             params={'user_ids': {
+                 'description': 'Список ID пользователей, разделенных запятыми (например, "1,2,3"). Обязательный параметр.',
+                 'required': True,
+                 'type': 'string',
+                 'example': '1,2,3'
+             }},
+             responses={
+                 200: 'Успешно возвращен список постов',
+                 400: 'Параметр user_ids отсутствует или содержит только неверные значения',
+                 500: 'Ошибка сервера'
+             })
+    @api.marshal_with(post_response_model, as_list=True)
     def get(self):
         try:
             user_ids_str = request.args.get('user_ids', '')
             if not user_ids_str:
                 return {'message': 'Параметр user_ids обязателен'}, 400
             
-            # Преобразуем строки в целые числа, игнорируя некорректные значения
             user_ids = []
             for uid in user_ids_str.split(','):
                 try:
@@ -202,6 +238,10 @@ class GetPostsByUsers(Resource):
 @api.route('/posts/<int:post_id>')
 class DeletePost(Resource):
     @token_required
+    @api.doc(description='Удаляет пост по его ID. Доступно только автору поста. '
+                         'Требуется заголовок Authorization с Bearer-токеном.',
+             responses={200: 'Пост успешно удален', 401: 'Токен отсутствует или неверный', 
+                        404: 'Пост не найден', 500: 'Ошибка сервера'})
     def delete(self, user_id, post_id):
         post = Post.query.filter_by(id=post_id, user_id=user_id).first()
         if not post:
@@ -221,7 +261,7 @@ class DeletePost(Resource):
             logger.error(f'Error deleting post: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
 
-    # Добавляем обработку OPTIONS для preflight-запросов
+    @api.doc(description='Обработка preflight-запросов для CORS.')
     def options(self, post_id):
         return {'message': 'OK'}, 200
 
@@ -229,7 +269,11 @@ class DeletePost(Resource):
 @api.route('/posts/like')
 class LikePost(Resource):
     @token_required
-    @api.expect(like_model)
+    @api.expect(like_model, validate=True)
+    @api.doc(description='Добавляет лайк к посту. Требуется JSON с полем "post_id". '
+                         'Требуется заголовок Authorization с Bearer-токеном.',
+             responses={201: 'Лайк успешно поставлен', 400: 'Лайк уже существует', 
+                        401: 'Токен отсутствует или неверный', 404: 'Пост не найден', 500: 'Ошибка сервера'})
     def post(self, user_id):
         data = request.get_json()
         post_id = data['post_id']
@@ -256,7 +300,11 @@ class LikePost(Resource):
 @api.route('/posts/unlike')
 class UnlikePost(Resource):
     @token_required
-    @api.expect(like_model)
+    @api.expect(like_model, validate=True)
+    @api.doc(description='Удаляет лайк с поста. Требуется JSON с полем "post_id". '
+                         'Требуется заголовок Authorization с Bearer-токеном.',
+             responses={200: 'Лайк успешно убран', 401: 'Токен отсутствует или неверный', 
+                        404: 'Лайк не найден', 500: 'Ошибка сервера'})
     def post(self, user_id):
         data = request.get_json()
         post_id = data['post_id']
@@ -280,7 +328,11 @@ class UnlikePost(Resource):
 @api.route('/posts/comment')
 class CommentPost(Resource):
     @token_required
-    @api.expect(comment_model)
+    @api.expect(comment_model, validate=True)
+    @api.doc(description='Добавляет комментарий к посту. Требуется JSON с полями "post_id" и "text". '
+                         'Требуется заголовок Authorization с Bearer-токеном.',
+             responses={201: 'Комментарий успешно добавлен', 401: 'Токен отсутствует или неверный', 
+                        404: 'Пост не найден', 500: 'Ошибка сервера'})
     def post(self, user_id):
         data = request.get_json()
         post_id = data['post_id']
@@ -303,16 +355,19 @@ class CommentPost(Resource):
 # Получение комментариев
 @api.route('/posts/<int:post_id>/comments')
 class GetComments(Resource):
+    @api.doc(description='Получает список комментариев для поста по его ID.',
+             responses={200: 'Успешно', 404: 'Пост не найден'})
+    @api.marshal_with(comment_response_model, as_list=True)
     def get(self, post_id):
         if not Post.query.get(post_id):
             return {'message': 'Пост не найден'}, 404
         comments = Comment.query.filter_by(post_id=post_id).all()
-        return jsonify([{
+        return [{
             'id': c.id,
             'user_id': c.user_id,
             'text': c.text,
             'created_at': c.created_at.isoformat()
-        } for c in comments])
+        } for c in comments]
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5003)
