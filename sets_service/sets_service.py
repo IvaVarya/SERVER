@@ -6,8 +6,12 @@ from flask_admin import Admin
 from flask_admin.contrib.sqla import ModelView
 from prometheus_flask_exporter import PrometheusMetrics
 import os
+from flask_cors import CORS
 
 app = Flask(__name__)
+
+# Настройка CORS
+CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
 
 # Логирование
 logging.basicConfig(level=logging.INFO)
