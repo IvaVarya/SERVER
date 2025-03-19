@@ -38,7 +38,7 @@ app.config['UPLOAD_FOLDER'] = '/app/uploads'
 
 db = SQLAlchemy(app)
 
-# Модели базы данных (без изменений)
+# Модели базы данных
 class Post(db.Model):
     __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
@@ -103,7 +103,7 @@ def internal_only(f):
         return f(*args, **kwargs)
     return decorated
 
-# Модели для Swagger (без изменений)
+# Модели для Swagger
 post_model = api.model('PostModel', {
     'text': fields.String(required=False, description='Текст поста (опционально).'),
 })
@@ -276,7 +276,56 @@ class GetComments(Resource):
             'created_at': c.created_at.isoformat()
         } for c in comments]
 
-# Внутренний эндпоинт (в отдельном Namespace)
+# Новый эндпоинт для получения постов пользователя
+@api.route('/posts/user/<int:user_id>')
+class GetPostsByUser(Resource):
+    @api.marshal_with(post_response_model, as_list=True)
+    @api.doc(responses={200: 'Успешно', 404: 'Посты не найдены'})
+    def get(self, user_id):
+        posts = Post.query.filter_by(user_id=user_id).order_by(Post.created_at.desc()).all()
+        if not posts:
+            logger.info(f'No posts found for user_id: {user_id}')
+            return {'message': 'Посты не найдены'}, 404
+        return [{
+            'id': post.id,
+            'user_id': post.user_id,
+            'text': post.text,
+            'created_at': post.created_at.isoformat(),
+            'photos': [{'id': p.id, 'filename': p.filename} for p in post.photos]
+        } for post in posts]
+    
+@api.route('/posts/all')
+class GetAllPosts(Resource):
+    @api.marshal_with(post_response_model, as_list=True)
+    @api.doc(security='Bearer Auth')
+    @token_required
+    @api.doc(responses={200: 'Успешно', 404: 'Посты не найдены', 500: 'Ошибка сервера'})
+    def get(self, user_id):
+        try:
+            # Фильтруем посты по user_id из токена
+            posts = Post.query.filter_by(user_id=user_id).order_by(Post.created_at.desc()).all()
+            if not posts:
+                logger.info(f"No posts found for user_id: {user_id}")
+                return {'message': 'Посты не найдены'}, 404
+            
+            # Формируем ответ
+            response = [{
+                'id': post.id,
+                'user_id': post.user_id,
+                'text': post.text or '',  # Обрабатываем случай, если text=None
+                'created_at': post.created_at.isoformat(),  # Предполагаем, что created_at всегда есть
+                'photos': [{'id': p.id, 'filename': p.filename} for p in post.photos]
+            } for post in posts]
+            
+            logger.info(f"Successfully retrieved {len(posts)} posts for user_id: {user_id}")
+            return response, 200
+        
+        except Exception as e:
+            # Логируем точную ошибку для диагностики
+            logger.error(f"Error in GetAllPosts for user_id {user_id}: {str(e)}")
+            return {'message': 'Ошибка сервера', 'error': str(e)}, 500
+
+# Внутренний эндпоинт
 @internal_ns.route('/posts/by_users')
 class GetPostsByUsersInternal(Resource):
     @internal_only
