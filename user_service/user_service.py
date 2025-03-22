@@ -1,5 +1,5 @@
 import logging
-from flask import Flask, request, make_response
+from flask import Flask, request, make_response, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
@@ -26,15 +26,16 @@ metrics = PrometheusMetrics(app)
 api = Api(app, version='1.0', title='User Service API', 
           description='API для управления пользователями и их профилями')
 
-# Конфигурация базы данных
+# Конфигурация базы данных и приложения
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:server@db:5432/PostgreSQL'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key')
 app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # Ограничение размера файла - 5 MB
 
 db = SQLAlchemy(app)
 
-# Обновленная модель пользователя
+# Модель пользователя
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -116,6 +117,11 @@ user_response_model = api.model('UserResponse', {
     'profile_photo': fields.String
 })
 
+# Маршрут для отдачи статических файлов
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @api.route('/register')
 class Register(Resource):
     @api.expect(user_model)
@@ -196,12 +202,14 @@ class Profile(Resource):
     @token_required
     @api.expect(profile_model)
     def put(self, current_user):
-        data = request.get_json() or {}
+        # Получаем текстовые данные из request.form вместо request.get_json()
+        data = request.form.to_dict() if request.form else {}
         schema = ProfileSchema()
         errors = schema.validate(data)
         if errors:
             return {'message': 'Ошибка валидации', 'errors': errors}, 400
 
+        # Обновление текстовых полей
         if 'first_name' in data:
             current_user.first_name = data['first_name']
         if 'last_name' in data:
@@ -214,17 +222,24 @@ class Profile(Resource):
             current_user.city = data['city']
         if 'birth_date' in data:
             try:
-                # Преобразуем строку "YYYY-MM-DD" в объект date
                 birth_date_str = data['birth_date']
                 current_user.birth_date = datetime.datetime.strptime(birth_date_str, '%Y-%m-%d').date()
             except (ValueError, TypeError):
                 return {'message': 'Некорректный формат даты, ожидается YYYY-MM-DD (например, "2003-02-01")'}, 400
 
+        # Обработка загрузки фото
         if 'profile_photo' in request.files:
             file = request.files['profile_photo']
             if file and allowed_file(file.filename):
-                filename = f"{current_user.id}_{file.filename}"
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                # Удаляем старое фото, если оно есть
+                if current_user.profile_photo:
+                    old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], current_user.profile_photo)
+                    if os.path.exists(old_file_path):
+                        os.remove(old_file_path)
+                # Сохраняем новое фото
+                filename = f"{current_user.id}_{datetime.datetime.utcnow().timestamp()}_{file.filename}"
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(file_path)
                 current_user.profile_photo = filename
             else:
                 return {'message': 'Некорректный формат файла (PNG, JPG, JPEG)'}, 400
@@ -236,6 +251,9 @@ class Profile(Resource):
     @token_required
     @api.response(200, 'User profile', user_response_model)
     def get(self, current_user):
+        base_url = request.host_url  # Например, http://localhost:5001/
+        profile_photo_url = f"{base_url}uploads/{current_user.profile_photo}" if current_user.profile_photo else None
+
         return {
             'id': current_user.id,
             'first_name': current_user.first_name,
@@ -246,9 +264,8 @@ class Profile(Resource):
             'gender': current_user.gender,
             'country': current_user.country,
             'city': current_user.city,
-            # Преобразуем объект date обратно в строку "YYYY-MM-DD" для клиента
             'birth_date': current_user.birth_date.strftime('%Y-%m-%d') if current_user.birth_date else None,
-            'profile_photo': current_user.profile_photo
+            'profile_photo': profile_photo_url
         }, 200
 
 def allowed_file(filename):
