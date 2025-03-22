@@ -202,50 +202,66 @@ class Profile(Resource):
     @token_required
     @api.expect(profile_model)
     def put(self, current_user):
-        # Получаем текстовые данные из request.form вместо request.get_json()
-        data = request.form.to_dict() if request.form else {}
-        schema = ProfileSchema()
-        errors = schema.validate(data)
-        if errors:
-            return {'message': 'Ошибка валидации', 'errors': errors}, 400
-
-        # Обновление текстовых полей
-        if 'first_name' in data:
-            current_user.first_name = data['first_name']
-        if 'last_name' in data:
-            current_user.last_name = data['last_name']
-        if 'gender' in data:
-            current_user.gender = data['gender']
-        if 'country' in data:
-            current_user.country = data['country']
-        if 'city' in data:
-            current_user.city = data['city']
-        if 'birth_date' in data:
-            try:
-                birth_date_str = data['birth_date']
-                current_user.birth_date = datetime.datetime.strptime(birth_date_str, '%Y-%m-%d').date()
-            except (ValueError, TypeError):
-                return {'message': 'Некорректный формат даты, ожидается YYYY-MM-DD (например, "2003-02-01")'}, 400
-
-        # Обработка загрузки фото
-        if 'profile_photo' in request.files:
-            file = request.files['profile_photo']
-            if file and allowed_file(file.filename):
-                # Удаляем старое фото, если оно есть
-                if current_user.profile_photo:
-                    old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], current_user.profile_photo)
-                    if os.path.exists(old_file_path):
-                        os.remove(old_file_path)
-                # Сохраняем новое фото
-                filename = f"{current_user.id}_{datetime.datetime.utcnow().timestamp()}_{file.filename}"
-                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                file.save(file_path)
-                current_user.profile_photo = filename
+        try:
+            # Проверяем, какой тип данных пришёл
+            if request.content_type == 'application/json':
+                data = request.get_json() or {}
             else:
-                return {'message': 'Некорректный формат файла (PNG, JPG, JPEG)'}, 400
+                data = request.form.to_dict() if request.form else {}
+            
+            logger.info(f"Полученные данные: {data}")
 
-        db.session.commit()
-        return {'message': 'Профиль успешно обновлен!'}, 200
+            # Валидация данных
+            schema = ProfileSchema()
+            errors = schema.validate(data)
+            if errors:
+                logger.error(f"Ошибка валидации: {errors}")
+                return {'message': 'Ошибка валидации', 'errors': errors}, 400
+
+            # Обновление текстовых полей
+            if 'first_name' in data:
+                current_user.first_name = data['first_name']
+            if 'last_name' in data:
+                current_user.last_name = data['last_name']
+            if 'gender' in data:
+                current_user.gender = data['gender']
+            if 'country' in data:
+                current_user.country = data['country']
+            if 'city' in data:
+                current_user.city = data['city']
+            if 'birth_date' in data:
+                try:
+                    birth_date_str = data['birth_date']
+                    current_user.birth_date = datetime.datetime.strptime(birth_date_str, '%Y-%m-%d').date()
+                except (ValueError, TypeError) as e:
+                    logger.error(f"Ошибка формата даты: {e}")
+                    return {'message': 'Некорректный формат даты, ожидается YYYY-MM-DD (например, "2003-02-01")'}, 400
+
+            # Обработка загрузки фото (только для multipart/form-data)
+            if 'profile_photo' in request.files:
+                file = request.files['profile_photo']
+                if file and allowed_file(file.filename):
+                    if current_user.profile_photo:
+                        old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], current_user.profile_photo)
+                        if os.path.exists(old_file_path):
+                            os.remove(old_file_path)
+                    filename = f"{current_user.id}_{datetime.datetime.utcnow().timestamp()}_{file.filename}"
+                    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                    file.save(file_path)
+                    current_user.profile_photo = filename
+                else:
+                    return {'message': 'Некорректный формат файла (PNG, JPG, JPEG)'}, 400
+
+            db.session.add(current_user)
+            db.session.commit()
+            logger.info(f"Профиль пользователя {current_user.id} успешно обновлён")
+
+            return {'message': 'Профиль успешно обновлен!'}, 200
+
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Ошибка при обновлении профиля: {str(e)}")
+            return {'message': 'Ошибка сервера при обновлении профиля', 'error': str(e)}, 500
 
     @api.doc(security='Bearer Auth')
     @token_required
