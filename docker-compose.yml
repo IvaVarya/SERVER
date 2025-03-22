@@ -12,34 +12,10 @@ services:
     networks:
       - backend
 
-  # auth_service:
-  #   build: ./auth_service
-  #   ports:
-  #     - "5001:5001"
-  #   environment:
-  #     - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
-  #   depends_on:
-  #     - db
-  #   networks:
-  #     - backend
-
-  # profile_service:
-  #   build: ./profile_service
-  #   ports:
-  #     - "5002:5002"
-  #   environment:
-  #     - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
-  #   depends_on:
-  #     - db
-  #   volumes:
-  #     - ./uploads:/app/uploads
-  #   networks:
-  #     - backend
-
   post_service:
     build: ./post_service
     ports:
-      - "5003:5003"
+      - "5002:5002"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
     depends_on:
@@ -52,7 +28,7 @@ services:
   feed_service:
     build: ./feed_service
     ports:
-      - "5004:5004"
+      - "5003:5003"
     depends_on:
       - post_service
       - friend_service
@@ -62,7 +38,7 @@ services:
   friend_service:
     build: ./friend_service
     ports:
-      - "5005:5005"
+      - "5004:5004"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
     depends_on:
@@ -73,7 +49,7 @@ services:
   sets_service:
     build: ./sets_service
     ports:
-      - "5006:5006"
+      - "5005:5005"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
     depends_on:

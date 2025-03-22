@@ -18,7 +18,7 @@ COPY schemas.py .
 RUN mkdir uploads
 
 # Открываем порт, который будет использовать микросервис
-EXPOSE 5003
+EXPOSE 5002
 
 # Команда для запуска приложения
 CMD ["python", "post_service.py"]

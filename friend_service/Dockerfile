@@ -3,5 +3,5 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY friend_service.py .
-EXPOSE 5005
+EXPOSE 5004
 CMD ["python", "friend_service.py"]

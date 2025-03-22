@@ -116,4 +116,4 @@ admin = Admin(app, name='Sets Admin', template_mode='bootstrap3')
 admin.add_view(SetAdmin(Set, db.session))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5006)
+    app.run(host='0.0.0.0', port=5005)

@@ -26,8 +26,8 @@ api = Api(app, version='1.0', title='Feed Service API',
 
 # Конфигурация приложения
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
-FRIEND_SERVICE_URL = 'http://friend_service:5005'
-POST_SERVICE_URL = 'http://post_service:5003'
+FRIEND_SERVICE_URL = 'http://friend_service:5004'
+POST_SERVICE_URL = 'http://post_service:5002'
 INTERNAL_KEY = os.getenv('INTERNAL_KEY', 'internal-secret')
 
 # Декоратор для проверки токена
@@ -87,4 +87,4 @@ class GetFeed(Resource):
             return {'message': 'Ошибка сервера'}, 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5004)
+    app.run(host='0.0.0.0', port=5003)
