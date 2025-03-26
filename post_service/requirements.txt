@@ -7,3 +7,6 @@ prometheus_flask_exporter
 marshmallow
 Werkzeug
 flask_cors
+pytest
+pytest-flask
+requests

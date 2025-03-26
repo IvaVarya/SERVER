@@ -27,7 +27,10 @@ api = Api(app, version='1.0', title='User Service API',
           description='API для управления пользователями и их профилями')
 
 # Конфигурация базы данных и приложения
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:server@db:5432/PostgreSQL'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
+    'DATABASE_URL', 
+    'sqlite:///:memory:'  # Запасной вариант для локального тестирования
+)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key')
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -57,10 +60,12 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-with app.app_context():
-    db.create_all()
-    if not os.path.exists(app.config['UPLOAD_FOLDER']):
-        os.makedirs(app.config['UPLOAD_FOLDER'])
+# Инициализация базы данных и папки uploads
+def init_db():
+    with app.app_context():
+        db.create_all()
+        if not os.path.exists(app.config['UPLOAD_FOLDER']):
+            os.makedirs(app.config['UPLOAD_FOLDER'])
 
 # Декоратор для проверки токена
 def token_required(f):
@@ -289,4 +294,5 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 if __name__ == '__main__':
+    init_db()  # Инициализация базы только при запуске приложения
     app.run(host='0.0.0.0', port=5001)

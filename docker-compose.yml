@@ -81,8 +81,6 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
     depends_on:
-      # - auth_service
-      # - profile_service
       - user_service
       - post_service
       - feed_service
