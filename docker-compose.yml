@@ -1,14 +1,18 @@
 version: '3.8'
 services:
-
   user_service:
     build: ./user_service
     ports:
       - "5001:5001"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+      - MINIO_ENDPOINT=minio:9000  # Эндпоинт MinIO
+      - MINIO_ACCESS_KEY=minioadmin  # Укажи свой ключ доступа
+      - MINIO_SECRET_KEY=minioadmin  # Укажи свой секретный ключ
+      - MINIO_BUCKET=profile-photos  # Название корзины для фото
     depends_on:
       - db
+      - minio
     networks:
       - backend
 
@@ -72,6 +76,20 @@ services:
     networks:
       - backend
 
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"  # Порт для API
+      - "9001:9001"  # Порт для веб-консоли
+    environment:
+      - MINIO_ROOT_USER=minioadmin  # Логин для доступа
+      - MINIO_ROOT_PASSWORD=minioadmin  # Пароль для доступа
+    command: server /data --console-address ":9001"  # Запуск MinIO
+    volumes:
+      - minio_data:/data  # Хранилище данных MinIO
+    networks:
+      - backend
+
   prometheus:
     image: prom/prometheus
     ports:
@@ -90,6 +108,7 @@ services:
 
 volumes:
   postgres_data:
+  minio_data:  # Новый том для MinIO
 
 networks:
   backend:

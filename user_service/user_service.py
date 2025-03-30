@@ -10,6 +10,8 @@ from prometheus_flask_exporter import PrometheusMetrics
 from schemas import UserSchema, ProfileSchema
 from flask_cors import CORS
 import os
+from minio import Minio
+from minio.error import S3Error
 
 app = Flask(__name__)
 
@@ -33,8 +35,34 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key')
-app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # Ограничение размера файла - 5 MB
+
+# Конфигурация MinIO
+MINIO_ENDPOINT = os.environ.get('MINIO_ENDPOINT', 'localhost:9000')
+MINIO_ACCESS_KEY = os.environ.get('MINIO_ACCESS_KEY', 'minioadmin')
+MINIO_SECRET_KEY = os.environ.get('MINIO_SECRET_KEY', 'minioadmin')
+MINIO_BUCKET = os.environ.get('MINIO_BUCKET', 'profile-photos')
+MINIO_SECURE = False  # Используй True, если настроишь HTTPS
+
+# Инициализация клиента MinIO
+minio_client = Minio(
+    MINIO_ENDPOINT,
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=MINIO_SECURE
+)
+
+# Проверка и создание корзины, если её нет
+def init_minio():
+    try:
+        if not minio_client.bucket_exists(MINIO_BUCKET):
+            minio_client.make_bucket(MINIO_BUCKET)
+            logger.info(f"Создана корзина {MINIO_BUCKET} в MinIO")
+        else:
+            logger.info(f"Корзина {MINIO_BUCKET} уже существует")
+    except S3Error as e:
+        logger.error(f"Ошибка инициализации MinIO: {e}")
+        raise
 
 db = SQLAlchemy(app)
 
@@ -52,7 +80,7 @@ class User(db.Model):
     country = db.Column(db.String(50))
     city = db.Column(db.String(50))
     birth_date = db.Column(db.Date)
-    profile_photo = db.Column(db.String(200))
+    profile_photo = db.Column(db.String(200))  # Теперь это URL или ключ объекта в MinIO
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -60,12 +88,11 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-# Инициализация базы данных и папки uploads
+# Инициализация базы данных и MinIO
 def init_db():
     with app.app_context():
         db.create_all()
-        if not os.path.exists(app.config['UPLOAD_FOLDER']):
-            os.makedirs(app.config['UPLOAD_FOLDER'])
+        init_minio()  # Инициализация MinIO при запуске
 
 # Декоратор для проверки токена
 def token_required(f):
@@ -88,7 +115,7 @@ def token_required(f):
             return {'message': 'Invalid token!'}, 401
     return decorated
 
-# Модели для Swagger
+# Модели для Swagger (без изменений)
 user_model = api.model('User', {
     'first_name': fields.String(required=True),
     'last_name': fields.String(required=True),
@@ -105,7 +132,7 @@ profile_model = api.model('Profile', {
     'country': fields.String(required=False),
     'city': fields.String(required=False),
     'birth_date': fields.String(required=False, description='Date in YYYY-MM-DD format (e.g., "2003-02-01")'),
-    'profile_photo': fields.String(required=False)
+    'profile_photo': fields.String(required=False)  # Теперь это будет multipart/form-data
 })
 
 user_response_model = api.model('UserResponse', {
@@ -119,14 +146,10 @@ user_response_model = api.model('UserResponse', {
     'country': fields.String,
     'city': fields.String,
     'birth_date': fields.String(description='Date in YYYY-MM-DD format (e.g., "2003-02-01")'),
-    'profile_photo': fields.String
+    'profile_photo': fields.String  # Теперь это URL
 })
 
-# Маршрут для отдачи статических файлов
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
+# Регистрация и логин остаются без изменений
 @api.route('/register')
 class Register(Resource):
     @api.expect(user_model)
@@ -242,18 +265,39 @@ class Profile(Resource):
                     logger.error(f"Ошибка формата даты: {e}")
                     return {'message': 'Некорректный формат даты, ожидается YYYY-MM-DD (например, "2003-02-01")'}, 400
 
-            # Обработка загрузки фото (только для multipart/form-data)
+            # Обработка загрузки фото в MinIO
             if 'profile_photo' in request.files:
                 file = request.files['profile_photo']
                 if file and allowed_file(file.filename):
-                    if current_user.profile_photo:
-                        old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], current_user.profile_photo)
-                        if os.path.exists(old_file_path):
-                            os.remove(old_file_path)
+                    # Уникальное имя файла
                     filename = f"{current_user.id}_{datetime.datetime.utcnow().timestamp()}_{file.filename}"
-                    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                    file.save(file_path)
-                    current_user.profile_photo = filename
+                    
+                    # Загружаем файл в MinIO
+                    try:
+                        minio_client.put_object(
+                            MINIO_BUCKET,
+                            filename,
+                            file.stream,
+                            length=-1,  # Автоматическое определение размера
+                            part_size=5*1024*1024,  # 5 MB chunks
+                            content_type=file.content_type
+                        )
+                        logger.info(f"Фото {filename} успешно загружено в MinIO")
+
+                        # Удаляем старое фото из MinIO, если оно есть
+                        if current_user.profile_photo:
+                            try:
+                                minio_client.remove_object(MINIO_BUCKET, current_user.profile_photo)
+                                logger.info(f"Старое фото {current_user.profile_photo} удалено из MinIO")
+                            except S3Error as e:
+                                logger.error(f"Ошибка удаления старого фото: {e}")
+
+                        # Сохраняем ключ объекта в базе
+                        current_user.profile_photo = filename
+
+                    except S3Error as e:
+                        logger.error(f"Ошибка загрузки в MinIO: {e}")
+                        return {'message': 'Ошибка загрузки фото в хранилище'}, 500
                 else:
                     return {'message': 'Некорректный формат файла (PNG, JPG, JPEG)'}, 400
 
@@ -272,8 +316,19 @@ class Profile(Resource):
     @token_required
     @api.response(200, 'User profile', user_response_model)
     def get(self, current_user):
-        base_url = request.host_url  # Например, http://localhost:5001/
-        profile_photo_url = f"{base_url}uploads/{current_user.profile_photo}" if current_user.profile_photo else None
+        # Генерируем URL для фото, если оно есть
+        profile_photo_url = None
+        if current_user.profile_photo:
+            try:
+                # Создаём временный URL для доступа к фото (действует 1 час)
+                profile_photo_url = minio_client.presigned_get_object(
+                    MINIO_BUCKET,
+                    current_user.profile_photo,
+                    expires=datetime.timedelta(hours=1)
+                )
+            except S3Error as e:
+                logger.error(f"Ошибка генерации URL для фото: {e}")
+                profile_photo_url = None
 
         return {
             'id': current_user.id,
@@ -294,5 +349,5 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 if __name__ == '__main__':
-    init_db()  # Инициализация базы только при запуске приложения
+    init_db()  # Инициализация базы и MinIO при запуске
     app.run(host='0.0.0.0', port=5001)

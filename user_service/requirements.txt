@@ -9,3 +9,4 @@ flask_cors
 pytest
 pytest-flask
 requests
+minio  # Добавляем клиент MinIO
