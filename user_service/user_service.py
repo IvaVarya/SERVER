@@ -326,6 +326,10 @@ class Profile(Resource):
                     current_user.profile_photo,
                     expires=datetime.timedelta(hours=1)
                 )
+                # Подменяем внутренний хост minio:9000 на внешний localhost:9000
+                profile_photo_url = profile_photo_url.replace(
+                    f"http://minio:9000", f"http://localhost:9000"
+                )
             except S3Error as e:
                 logger.error(f"Ошибка генерации URL для фото: {e}")
                 profile_photo_url = None
