@@ -22,10 +22,13 @@ services:
       - "5002:5002"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=post-photos
     depends_on:
       - db
-    volumes:
-      - ./uploads:/app/uploads
+      - minio
     networks:
       - backend
 

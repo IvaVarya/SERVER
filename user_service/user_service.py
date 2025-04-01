@@ -10,6 +10,7 @@ from prometheus_flask_exporter import PrometheusMetrics
 from schemas import UserSchema, ProfileSchema
 from flask_cors import CORS
 import os
+import json
 from minio import Minio
 from minio.error import S3Error
 
@@ -52,14 +53,26 @@ minio_client = Minio(
     secure=MINIO_SECURE
 )
 
-# Проверка и создание корзины, если её нет
+# Проверка и создание корзины с публичной политикой
 def init_minio():
     try:
         if not minio_client.bucket_exists(MINIO_BUCKET):
             minio_client.make_bucket(MINIO_BUCKET)
             logger.info(f"Создана корзина {MINIO_BUCKET} в MinIO")
-        else:
-            logger.info(f"Корзина {MINIO_BUCKET} уже существует")
+        # Устанавливаем публичную политику
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": "*",
+                    "Action": ["s3:GetObject"],
+                    "Resource": [f"arn:aws:s3:::{MINIO_BUCKET}/*"]
+                }
+            ]
+        }
+        minio_client.set_bucket_policy(MINIO_BUCKET, json.dumps(policy))
+        logger.info(f"Установлена публичная политика для {MINIO_BUCKET}")
     except S3Error as e:
         logger.error(f"Ошибка инициализации MinIO: {e}")
         raise
@@ -80,7 +93,7 @@ class User(db.Model):
     country = db.Column(db.String(50))
     city = db.Column(db.String(50))
     birth_date = db.Column(db.Date)
-    profile_photo = db.Column(db.String(200))  # Теперь это URL или ключ объекта в MinIO
+    profile_photo = db.Column(db.String(200))  # Теперь это ключ объекта в MinIO
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -115,7 +128,7 @@ def token_required(f):
             return {'message': 'Invalid token!'}, 401
     return decorated
 
-# Модели для Swagger (без изменений)
+# Модели для Swagger
 user_model = api.model('User', {
     'first_name': fields.String(required=True),
     'last_name': fields.String(required=True),
@@ -132,7 +145,7 @@ profile_model = api.model('Profile', {
     'country': fields.String(required=False),
     'city': fields.String(required=False),
     'birth_date': fields.String(required=False, description='Date in YYYY-MM-DD format (e.g., "2003-02-01")'),
-    'profile_photo': fields.String(required=False)  # Теперь это будет multipart/form-data
+    'profile_photo': fields.String(required=False)
 })
 
 user_response_model = api.model('UserResponse', {
@@ -146,7 +159,7 @@ user_response_model = api.model('UserResponse', {
     'country': fields.String,
     'city': fields.String,
     'birth_date': fields.String(description='Date in YYYY-MM-DD format (e.g., "2003-02-01")'),
-    'profile_photo': fields.String  # Теперь это URL
+    'profile_photo': fields.String
 })
 
 # Регистрация и логин остаются без изменений
@@ -231,7 +244,6 @@ class Profile(Resource):
     @api.expect(profile_model)
     def put(self, current_user):
         try:
-            # Проверяем, какой тип данных пришёл
             if request.content_type == 'application/json':
                 data = request.get_json() or {}
             else:
@@ -239,14 +251,12 @@ class Profile(Resource):
             
             logger.info(f"Полученные данные: {data}")
 
-            # Валидация данных
             schema = ProfileSchema()
             errors = schema.validate(data)
             if errors:
                 logger.error(f"Ошибка валидации: {errors}")
                 return {'message': 'Ошибка валидации', 'errors': errors}, 400
 
-            # Обновление текстовых полей
             if 'first_name' in data:
                 current_user.first_name = data['first_name']
             if 'last_name' in data:
@@ -265,26 +275,21 @@ class Profile(Resource):
                     logger.error(f"Ошибка формата даты: {e}")
                     return {'message': 'Некорректный формат даты, ожидается YYYY-MM-DD (например, "2003-02-01")'}, 400
 
-            # Обработка загрузки фото в MinIO
             if 'profile_photo' in request.files:
                 file = request.files['profile_photo']
                 if file and allowed_file(file.filename):
-                    # Уникальное имя файла
                     filename = f"{current_user.id}_{datetime.datetime.utcnow().timestamp()}_{file.filename}"
-                    
-                    # Загружаем файл в MinIO
                     try:
                         minio_client.put_object(
                             MINIO_BUCKET,
                             filename,
                             file.stream,
-                            length=-1,  # Автоматическое определение размера
-                            part_size=5*1024*1024,  # 5 MB chunks
+                            length=-1,
+                            part_size=5*1024*1024,
                             content_type=file.content_type
                         )
                         logger.info(f"Фото {filename} успешно загружено в MinIO")
 
-                        # Удаляем старое фото из MinIO, если оно есть
                         if current_user.profile_photo:
                             try:
                                 minio_client.remove_object(MINIO_BUCKET, current_user.profile_photo)
@@ -292,7 +297,6 @@ class Profile(Resource):
                             except S3Error as e:
                                 logger.error(f"Ошибка удаления старого фото: {e}")
 
-                        # Сохраняем ключ объекта в базе
                         current_user.profile_photo = filename
 
                     except S3Error as e:
@@ -316,23 +320,10 @@ class Profile(Resource):
     @token_required
     @api.response(200, 'User profile', user_response_model)
     def get(self, current_user):
-        # Генерируем URL для фото, если оно есть
+        # Возвращаем прямой URL, так как бакет публичный
         profile_photo_url = None
         if current_user.profile_photo:
-            try:
-                # Создаём временный URL для доступа к фото (действует 1 час)
-                profile_photo_url = minio_client.presigned_get_object(
-                    MINIO_BUCKET,
-                    current_user.profile_photo,
-                    expires=datetime.timedelta(hours=1)
-                )
-                # Подменяем внутренний хост minio:9000 на внешний localhost:9000
-                profile_photo_url = profile_photo_url.replace(
-                    f"http://minio:9000", f"http://localhost:9000"
-                )
-            except S3Error as e:
-                logger.error(f"Ошибка генерации URL для фото: {e}")
-                profile_photo_url = None
+            profile_photo_url = f"http://localhost:9000/{MINIO_BUCKET}/{current_user.profile_photo}"
 
         return {
             'id': current_user.id,

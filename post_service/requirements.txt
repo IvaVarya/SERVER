@@ -10,3 +10,4 @@ flask_cors
 pytest
 pytest-flask
 requests
+minio
