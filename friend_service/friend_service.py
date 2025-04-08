@@ -11,8 +11,10 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 
+# Настройка CORS
 CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ metrics = PrometheusMetrics(app)
 
 api = Api(app, version='1.0', title='Friend Service API', description='API для управления друзьями')
 
+# Конфигурация приложения
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
@@ -30,7 +33,7 @@ class Friendship(db.Model):
     __tablename__ = 'friendships'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, nullable=False)
-    friend_id = db.Column(db.Integer, nullable=False)  # Исправлено: добавлено поле friend_id
+    friend_id = db.Column(db.Integer, nullable=False)
     status = db.Column(db.String(20), default='pending')  # pending, accepted
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -40,23 +43,33 @@ class Friendship(db.Model):
 
 def init_db():
     with app.app_context():
-        db.create_all()
+        try:
+            db.create_all()
+            logger.info("Database tables created successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {str(e)}")
 
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
+        logger.info(f"Received Authorization header: {token}")
         if not token:
             logger.warning('Token is missing!')
-            return {'message': 'Токен отсутствует!'}, 401
+            return jsonify({'message': 'Токен отсутствует!'}), 401
         try:
             if token.startswith('Bearer '):
                 token = token.split(' ')[1]
+            logger.info(f"Extracted token: {token}")
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            logger.info(f"Decoded token data: {data}")
             kwargs['user_id'] = data['user_id']
-        except jwt.InvalidTokenError:
-            logger.warning('Token is invalid!')
-            return {'message': 'Неверный токен!'}, 401
+        except jwt.InvalidTokenError as e:
+            logger.warning(f'Token is invalid: {str(e)}')
+            return jsonify({'message': 'Неверный токен!'}), 401
+        except Exception as e:
+            logger.error(f'Unexpected error decoding token: {str(e)}')
+            return jsonify({'message': 'Ошибка обработки токена!'}), 500
         return f(*args, **kwargs)
     return decorated
 
@@ -84,24 +97,24 @@ class FriendRequest(Resource):
         data = request.get_json()
         friend_id = data.get('friend_id')
         if not friend_id:
-            return {'message': 'friend_id обязателен!'}, 400
+            return jsonify({'message': 'friend_id обязателен!'}), 400
         if user_id == friend_id:
-            return {'message': 'Нельзя добавить себя в друзья!'}, 400
+            return jsonify({'message': 'Нельзя добавить себя в друзья!'}), 400
 
         existing = Friendship.query.filter_by(user_id=user_id, friend_id=friend_id).first()
         if existing:
-            return {'message': 'Запрос уже отправлен или вы уже друзья!'}, 400
+            return jsonify({'message': 'Запрос уже отправлен или вы уже друзья!'}), 400
 
         try:
             friendship = Friendship(user_id=user_id, friend_id=friend_id)
             db.session.add(friendship)
             db.session.commit()
             logger.info(f'Friend request from user_id: {user_id} to friend_id: {friend_id}')
-            return {'message': 'Запрос в друзья отправлен!', 'request_id': friendship.id}, 201
+            return jsonify({'message': 'Запрос в друзья отправлен!', 'request_id': friendship.id}), 201
         except Exception as e:
             db.session.rollback()
             logger.error(f'Error sending friend request: {str(e)}')
-            return {'message': 'Ошибка сервера'}, 500
+            return jsonify({'message': 'Ошибка сервера'}), 500
 
 @api.route('/friends/accept')
 class AcceptFriend(Resource):
@@ -111,11 +124,11 @@ class AcceptFriend(Resource):
         data = request.get_json()
         friend_id = data.get('friend_id')
         if not friend_id:
-            return {'message': 'friend_id обязателен!'}, 400
+            return jsonify({'message': 'friend_id обязателен!'}), 400
         
         friendship = Friendship.query.filter_by(user_id=friend_id, friend_id=user_id, status='pending').first()
         if not friendship:
-            return {'message': 'Запрос в друзья не найден!'}, 404
+            return jsonify({'message': 'Запрос в друзья не найден!'}), 404
 
         try:
             friendship.status = 'accepted'
@@ -123,11 +136,11 @@ class AcceptFriend(Resource):
             db.session.add(reverse_friendship)
             db.session.commit()
             logger.info(f'Friendship accepted between user_id: {user_id} and friend_id: {friend_id}')
-            return {'message': 'Друг добавлен!'}, 200
+            return jsonify({'message': 'Друг добавлен!'}), 200
         except Exception as e:
             db.session.rollback()
             logger.error(f'Error accepting friend request: {str(e)}')
-            return {'message': 'Ошибка сервера'}, 500
+            return jsonify({'message': 'Ошибка сервера'}), 500
 
 @api.route('/friends/<int:friend_id>')
 class DeleteFriend(Resource):
@@ -135,7 +148,7 @@ class DeleteFriend(Resource):
     def delete(self, user_id, friend_id):
         friendship = Friendship.query.filter_by(user_id=user_id, friend_id=friend_id, status='accepted').first()
         if not friendship:
-            return {'message': 'Друг не найден!'}, 404
+            return jsonify({'message': 'Друг не найден!'}), 404
 
         try:
             reverse_friendship = Friendship.query.filter_by(user_id=friend_id, friend_id=user_id, status='accepted').first()
@@ -144,22 +157,28 @@ class DeleteFriend(Resource):
                 db.session.delete(reverse_friendship)
             db.session.commit()
             logger.info(f'Friendship deleted between user_id: {user_id} and friend_id: {friend_id}')
-            return {'message': 'Друг удален!'}, 200
+            return jsonify({'message': 'Друг удален!'}), 200
         except Exception as e:
             db.session.rollback()
             logger.error(f'Error deleting friend: {str(e)}')
-            return {'message': 'Ошибка сервера'}, 500
+            return jsonify({'message': 'Ошибка сервера'}), 500
 
 @api.route('/friends')
 class GetFriends(Resource):
     @token_required
     @api.marshal_with(friend_model, as_list=True)
     def get(self, user_id):
-        friends = Friendship.query.filter_by(user_id=user_id, status='accepted').all()
-        return [{
-            'friend_id': f.friend_id,
-            'created_at': f.created_at.isoformat()
-        } for f in friends]
+        try:
+            logger.info(f"Fetching friends for user_id: {user_id}")
+            friends = Friendship.query.filter_by(user_id=user_id, status='accepted').all()
+            logger.info(f"Found {len(friends)} friends")
+            return [{
+                'friend_id': f.friend_id,
+                'created_at': f.created_at.isoformat()
+            } for f in friends]
+        except Exception as e:
+            logger.error(f'Error fetching friends: {str(e)}')
+            return jsonify({'message': 'Ошибка сервера'}), 500
 
 @api.route('/friends/search')
 class SearchFriends(Resource):
@@ -169,9 +188,10 @@ class SearchFriends(Resource):
     def get(self, user_id):
         query = request.args.get('query', '').strip()
         if not query:
-            return {'message': 'Параметр query обязателен!'}, 400
+            return jsonify({'message': 'Параметр query обязателен!'}), 400
 
         try:
+            logger.info(f"Searching friends for user_id: {user_id} with query: {query}")
             from user_service import User
             users = User.query.filter(
                 (User.login.ilike(f'%{query}%')) |
@@ -185,9 +205,12 @@ class SearchFriends(Resource):
                 'first_name': user.first_name,
                 'last_name': user.last_name
             } for user in users], 200
+        except ImportError as e:
+            logger.error(f'Error importing user_service: {str(e)}')
+            return jsonify({'message': 'Ошибка сервера: отсутствует user_service'}), 500
         except Exception as e:
             logger.error(f'Error searching friends: {str(e)}')
-            return {'message': 'Ошибка сервера'}, 500
+            return jsonify({'message': 'Ошибка сервера'}), 500
 
 if __name__ == '__main__':
     init_db()
