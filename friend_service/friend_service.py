@@ -8,7 +8,6 @@ from functools import wraps
 from datetime import datetime
 from prometheus_flask_exporter import PrometheusMetrics
 from flask_cors import CORS
-import requests  # Добавляем для HTTP-запросов
 
 app = Flask(__name__)
 
@@ -24,7 +23,6 @@ api = Api(app, version='1.0', title='Friend Service API', description='API дл�
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
-app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://localhost:5001')  # URL user_service
 
 db = SQLAlchemy(app)
 
@@ -79,13 +77,6 @@ friend_request_model = api.model('FriendRequestModel', {
 friend_model = api.model('Friend', {
     'friend_id': fields.Integer(description='ID друга'),
     'created_at': fields.String(description='Дата создания дружбы в формате ISO')
-})
-
-search_model = api.model('SearchResult', {
-    'id': fields.Integer(description='ID пользователя'),
-    'login': fields.String(description='Логин пользователя'),
-    'first_name': fields.String(description='Имя'),
-    'last_name': fields.String(description='Фамилия')
 })
 
 @api.route('/friends/request')
@@ -177,35 +168,6 @@ class GetFriends(Resource):
             } for f in friends]
         except Exception as e:
             logger.error(f'Error fetching friends: {str(e)}')
-            return jsonify({'message': 'Ошибка сервера'}), 500
-
-@api.route('/friends/search')
-class SearchFriends(Resource):
-    @token_required
-    @api.doc(params={'query': 'Поисковый запрос (логин, имя или фамилия)'})
-    @api.marshal_with(search_model, as_list=True)
-    def get(self, user_id):
-        query = request.args.get('query', '').strip()
-        if not query:
-            return jsonify({'message': 'Параметр query обязателен!'}), 400
-
-        try:
-            logger.info(f"Searching friends for user_id: {user_id} with query: {query}")
-            # Делаем запрос к user_service
-            user_service_url = f"{app.config['USER_SERVICE_URL']}/users/search?query={query}"
-            headers = {'Authorization': request.headers.get('Authorization')}
-            response = requests.get(user_service_url, headers=headers, timeout=5)
-            response.raise_for_status()  # Вызывает исключение при ошибке HTTP
-
-            users = response.json()
-            # Фильтруем текущего пользователя
-            users = [user for user in users if user['id'] != user_id]
-            return users[:10], 200  # Ограничиваем до 10 результатов
-        except requests.RequestException as e:
-            logger.error(f'Error calling user_service: {str(e)}')
-            return jsonify({'message': 'Ошибка при запросе к user_service'}), 500
-        except Exception as e:
-            logger.error(f'Error searching friends: {str(e)}')
             return jsonify({'message': 'Ошибка сервера'}), 500
 
 if __name__ == '__main__':
