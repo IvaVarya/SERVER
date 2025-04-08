@@ -159,9 +159,6 @@ comment_response_model = api.model('CommentResponse', {
     'text': fields.String(description='Текст комментария'),
     'created_at': fields.String(description='Дата создания в формате ISO')
 })
-delete_comment_model = api.model('DeleteCommentModel', {
-    'comment_id': fields.Integer(required=True, description='ID комментария для удаления')
-})
 
 def allowed_file(filename):
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
@@ -289,22 +286,23 @@ class LikePost(Resource):
             db.session.rollback()
             return {'message': 'Ошибка сервера'}, 500
 
-@api.route('/posts/unlike')
+@api.route('/posts/<int:post_id>/unlike')
 class UnlikePost(Resource):
     @token_required
-    @api.expect(like_model, validate=True)
-    def post(self, user_id):
-        data = request.get_json()
-        post_id = data['post_id']
+    @api.doc(responses={200: 'Лайк удален', 401: 'Токен неверный', 404: 'Лайк не найден', 500: 'Ошибка сервера'})
+    def delete(self, user_id, post_id):
         like = Like.query.filter_by(user_id=user_id, post_id=post_id).first()
         if not like:
+            logger.warning(f'Like not found for user_id: {user_id}, post_id: {post_id}')
             return {'message': 'Лайк не найден.'}, 404
         try:
             db.session.delete(like)
             db.session.commit()
-            return {'message': 'Лайк успешно убран!'}, 200
+            logger.info(f'Like deleted by user_id: {user_id}, post_id: {post_id}')
+            return {'message': 'Лайк успешно удален!'}, 200
         except Exception as e:
             db.session.rollback()
+            logger.error(f'Error deleting like: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
 
 @api.route('/posts/comment')
@@ -326,24 +324,15 @@ class CommentPost(Resource):
             db.session.rollback()
             return {'message': 'Ошибка сервера'}, 500
 
-@api.route('/posts/comment/delete')
+@api.route('/posts/comments/<int:comment_id>')
 class DeleteComment(Resource):
     @token_required
-    @api.expect(delete_comment_model, validate=True)
-    @api.doc(responses={
-        200: 'Комментарий успешно удален',
-        401: 'Токен неверный',
-        403: 'Нет доступа к удалению комментария',
-        404: 'Комментарий не найден',
-        500: 'Ошибка сервера'
-    }, description="Удаляет комментарий. Пользователь может удалить только свой комментарий.")
-    def post(self, user_id):
-        data = request.get_json()
-        comment_id = data['comment_id']
+    @api.doc(responses={200: 'Комментарий удален', 401: 'Токен неверный', 404: 'Комментарий не найден', 500: 'Ошибка сервера'})
+    def delete(self, user_id, comment_id):
         comment = Comment.query.filter_by(id=comment_id, user_id=user_id).first()
         if not comment:
-            logger.warning(f'Comment not found or not owned by user_id: {user_id}, comment_id: {comment_id}')
-            return {'message': 'Комментарий не найден или вы не можете его удалить'}, 404 if Comment.query.get(comment_id) is None else 403
+            logger.warning(f'Comment not found for user_id: {user_id}, comment_id: {comment_id}')
+            return {'message': 'Комментарий не найден.'}, 404
         try:
             db.session.delete(comment)
             db.session.commit()
