@@ -6,3 +6,4 @@ flask-restx
 prometheus_flask_exporter
 marshmallow
 Werkzeug
+flask_cors

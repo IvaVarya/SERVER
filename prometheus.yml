@@ -9,3 +9,17 @@ scrape_configs:
   - job_name: 'post_service'
     static_configs:
       - targets: ['post_service:5002']
+
+  - job_name: 'feed_service'
+    static_configs:
+      - targets: ['feed_service:5003']
+
+  - job_name: 'friend_service'
+    static_configs:
+      - targets: ['friend_service:5004']
+
+  - job_name: 'sets_service'
+    static_configs:
+      - targets: ['sets_service:5005']
+
+

@@ -93,7 +93,7 @@ class User(db.Model):
     country = db.Column(db.String(50))
     city = db.Column(db.String(50))
     birth_date = db.Column(db.Date)
-    profile_photo = db.Column(db.String(200))  # Теперь это ключ объекта в MinIO
+    profile_photo = db.Column(db.String(200))
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -105,7 +105,7 @@ class User(db.Model):
 def init_db():
     with app.app_context():
         db.create_all()
-        init_minio()  # Инициализация MinIO при запуске
+        init_minio()
 
 # Декоратор для проверки токена
 def token_required(f):
@@ -344,5 +344,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 if __name__ == '__main__':
-    init_db()  # Инициализация базы и MinIO при запуске
+    init_db()
     app.run(host='0.0.0.0', port=5001)
+
+    

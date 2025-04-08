@@ -5,3 +5,5 @@ flask-restx
 prometheus_flask_exporter
 flask-admin
 flask_cors
+pyjwt
+minio

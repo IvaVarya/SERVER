@@ -6,10 +6,10 @@ services:
       - "5001:5001"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
-      - MINIO_ENDPOINT=minio:9000  # Эндпоинт MinIO
-      - MINIO_ACCESS_KEY=minioadmin  # Укажи свой ключ доступа
-      - MINIO_SECRET_KEY=minioadmin  # Укажи свой секретный ключ
-      - MINIO_BUCKET=profile-photos  # Название корзины для фото
+      - MINIO_ENDPOINT=minio:9000 
+      - MINIO_ACCESS_KEY=minioadmin  
+      - MINIO_SECRET_KEY=minioadmin 
+      - MINIO_BUCKET=profile-photos  
     depends_on:
       - db
       - minio
@@ -56,15 +56,19 @@ services:
   sets_service:
     build: ./sets_service
     ports:
-      - "5005:5005"
+    - "5005:5005"
     environment:
-      - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+    - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+    - SECRET_KEY=your-secret-key
+    - MINIO_ENDPOINT=minio:9000  
+    - MINIO_ACCESS_KEY=minioadmin
+    - MINIO_SECRET_KEY=minioadmin
+    - MINIO_BUCKET=set-photos
     depends_on:
-      - db
-    volumes:
-      - ./uploads:/app/uploads
+    - db
+    - minio
     networks:
-      - backend
+    - backend
 
   db:
     image: postgres:13
@@ -82,14 +86,14 @@ services:
   minio:
     image: minio/minio:latest
     ports:
-      - "9000:9000"  # Порт для API
-      - "9001:9001"  # Порт для веб-консоли
+      - "9000:9000"  
+      - "9001:9001"  
     environment:
-      - MINIO_ROOT_USER=minioadmin  # Логин для доступа
-      - MINIO_ROOT_PASSWORD=minioadmin  # Пароль для доступа
-    command: server /data --console-address ":9001"  # Запуск MinIO
+      - MINIO_ROOT_USER=minioadmin  
+      - MINIO_ROOT_PASSWORD=minioadmin 
+    command: server /data --console-address ":9001"  
     volumes:
-      - minio_data:/data  # Хранилище данных MinIO
+      - minio_data:/data  
     networks:
       - backend
 
@@ -111,7 +115,7 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:  # Новый том для MinIO
+  minio_data: 
 
 networks:
   backend:
