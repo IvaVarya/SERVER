@@ -1,6 +1,6 @@
 import logging
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_restx import Api, Resource, fields
 import jwt
@@ -8,6 +8,7 @@ from functools import wraps
 from datetime import datetime
 from prometheus_flask_exporter import PrometheusMetrics
 from flask_cors import CORS
+import requests
 
 app = Flask(__name__)
 
@@ -23,6 +24,7 @@ api = Api(app, version='1.0', title='Friend Service API', description='API дл�
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
+app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://localhost:5001')
 
 db = SQLAlchemy(app)
 
@@ -53,7 +55,7 @@ def token_required(f):
         logger.info(f"Received Authorization header: {token}")
         if not token:
             logger.warning('Token is missing!')
-            return jsonify({'message': 'Токен отсутствует!'}), 401
+            return {'message': 'Токен отсутствует!'}, 401
         try:
             if token.startswith('Bearer '):
                 token = token.split(' ')[1]
@@ -63,12 +65,41 @@ def token_required(f):
             kwargs['user_id'] = data['user_id']
         except jwt.InvalidTokenError as e:
             logger.warning(f'Token is invalid: {str(e)}')
-            return jsonify({'message': 'Неверный токен!'}), 401
+            return {'message': 'Неверный токен!'}, 401
         except Exception as e:
             logger.error(f'Unexpected error decoding token: {str(e)}')
-            return jsonify({'message': 'Ошибка обработки токена!'}), 500
+            return {'message': 'Ошибка обработки токена!'}, 500
         return f(*args, **kwargs)
     return decorated
+
+def check_user_exists(user_id):
+    try:
+        headers = {'Authorization': request.headers.get('Authorization')}
+        response = requests.get(f"{app.config['USER_SERVICE_URL']}/users/{user_id}", headers=headers, timeout=5)
+        response.raise_for_status()
+        return True
+    except requests.ConnectionError:
+        logger.error(f"User service unavailable for user_id {user_id}")
+        raise Exception("Сервис пользователей недоступен!")
+    except requests.RequestException as e:
+        logger.error(f"Error checking user {user_id} existence: {str(e)}")
+        return False
+
+def get_user_info(user_id):
+    try:
+        headers = {'Authorization': request.headers.get('Authorization')}
+        response = requests.get(f"{app.config['USER_SERVICE_URL']}/users/{user_id}", headers=headers, timeout=5)
+        response.raise_for_status()
+        user_data = response.json()
+        return {
+            'id': user_data['id'],
+            'first_name': user_data['first_name'],
+            'last_name': user_data['last_name'],
+            'login': user_data['login']
+        }
+    except requests.RequestException as e:
+        logger.error(f"Error fetching user info for {user_id}: {str(e)}")
+        return None
 
 friend_request_model = api.model('FriendRequestModel', {
     'friend_id': fields.Integer(required=True, description='ID пользователя для добавления в друзья')
@@ -76,7 +107,17 @@ friend_request_model = api.model('FriendRequestModel', {
 
 friend_model = api.model('Friend', {
     'friend_id': fields.Integer(description='ID друга'),
+    'first_name': fields.String(description='Имя друга'),
+    'last_name': fields.String(description='Фамилия друга'),
+    'login': fields.String(description='Логин друга'),
     'created_at': fields.String(description='Дата создания дружбы в формате ISO')
+})
+
+search_result_model = api.model('SearchResult', {
+    'id': fields.Integer(description='ID пользователя'),
+    'login': fields.String(description='Логин пользователя'),
+    'first_name': fields.String(description='Имя'),
+    'last_name': fields.String(description='Фамилия')
 })
 
 @api.route('/friends/request')
@@ -87,24 +128,30 @@ class FriendRequest(Resource):
         data = request.get_json()
         friend_id = data.get('friend_id')
         if not friend_id:
-            return jsonify({'message': 'friend_id обязателен!'}), 400
+            return {'message': 'friend_id обязателен!'}, 400
         if user_id == friend_id:
-            return jsonify({'message': 'Нельзя добавить себя в друзья!'}), 400
+            return {'message': 'Нельзя добавить себя в друзья!'}, 400
+
+        try:
+            if not check_user_exists(friend_id):
+                return {'message': 'Пользователь с таким friend_id не существует!'}, 404
+        except Exception as e:
+            return {'message': str(e)}, 503
 
         existing = Friendship.query.filter_by(user_id=user_id, friend_id=friend_id).first()
         if existing:
-            return jsonify({'message': 'Запрос уже отправлен или вы уже друзья!'}), 400
+            return {'message': 'Запрос уже отправлен или вы уже друзья!'}, 400
 
         try:
             friendship = Friendship(user_id=user_id, friend_id=friend_id)
             db.session.add(friendship)
             db.session.commit()
             logger.info(f'Friend request from user_id: {user_id} to friend_id: {friend_id}')
-            return jsonify({'message': 'Запрос в друзья отправлен!', 'request_id': friendship.id}), 201
+            return {'message': 'Запрос в друзья отправлен!', 'request_id': friendship.id}, 201
         except Exception as e:
             db.session.rollback()
             logger.error(f'Error sending friend request: {str(e)}')
-            return jsonify({'message': 'Ошибка сервера'}), 500
+            return {'message': 'Ошибка сервера'}, 500
 
 @api.route('/friends/accept')
 class AcceptFriend(Resource):
@@ -114,11 +161,17 @@ class AcceptFriend(Resource):
         data = request.get_json()
         friend_id = data.get('friend_id')
         if not friend_id:
-            return jsonify({'message': 'friend_id обязателен!'}), 400
-        
+            return {'message': 'friend_id обязателен!'}, 400
+
+        try:
+            if not check_user_exists(friend_id):
+                return {'message': 'Пользователь с таким friend_id не существует!'}, 404
+        except Exception as e:
+            return {'message': str(e)}, 503
+
         friendship = Friendship.query.filter_by(user_id=friend_id, friend_id=user_id, status='pending').first()
         if not friendship:
-            return jsonify({'message': 'Запрос в друзья не найден!'}), 404
+            return {'message': 'Запрос в друзья не найден!'}, 404
 
         try:
             friendship.status = 'accepted'
@@ -126,19 +179,25 @@ class AcceptFriend(Resource):
             db.session.add(reverse_friendship)
             db.session.commit()
             logger.info(f'Friendship accepted between user_id: {user_id} and friend_id: {friend_id}')
-            return jsonify({'message': 'Друг добавлен!'}), 200
+            return {'message': 'Друг добавлен!'}, 200
         except Exception as e:
             db.session.rollback()
             logger.error(f'Error accepting friend request: {str(e)}')
-            return jsonify({'message': 'Ошибка сервера'}), 500
+            return {'message': 'Ошибка сервера'}, 500
 
 @api.route('/friends/<int:friend_id>')
 class DeleteFriend(Resource):
     @token_required
     def delete(self, user_id, friend_id):
+        try:
+            if not check_user_exists(friend_id):
+                return {'message': 'Пользователь с таким friend_id не существует!'}, 404
+        except Exception as e:
+            return {'message': str(e)}, 503
+
         friendship = Friendship.query.filter_by(user_id=user_id, friend_id=friend_id, status='accepted').first()
         if not friendship:
-            return jsonify({'message': 'Друг не найден!'}), 404
+            return {'message': 'Друг не найден!'}, 404
 
         try:
             reverse_friendship = Friendship.query.filter_by(user_id=friend_id, friend_id=user_id, status='accepted').first()
@@ -147,11 +206,11 @@ class DeleteFriend(Resource):
                 db.session.delete(reverse_friendship)
             db.session.commit()
             logger.info(f'Friendship deleted between user_id: {user_id} and friend_id: {friend_id}')
-            return jsonify({'message': 'Друг удален!'}), 200
+            return {'message': 'Друг удален!'}, 200
         except Exception as e:
             db.session.rollback()
             logger.error(f'Error deleting friend: {str(e)}')
-            return jsonify({'message': 'Ошибка сервера'}), 500
+            return {'message': 'Ошибка сервера'}, 500
 
 @api.route('/friends')
 class GetFriends(Resource):
@@ -162,13 +221,53 @@ class GetFriends(Resource):
             logger.info(f"Fetching friends for user_id: {user_id}")
             friends = Friendship.query.filter_by(user_id=user_id, status='accepted').all()
             logger.info(f"Found {len(friends)} friends")
-            return [{
-                'friend_id': f.friend_id,
-                'created_at': f.created_at.isoformat()
-            } for f in friends]
+
+            friend_list = []
+            for f in friends:
+                friend_info = get_user_info(f.friend_id)
+                if friend_info:
+                    friend_list.append({
+                        'friend_id': f.friend_id,
+                        'first_name': friend_info['first_name'],
+                        'last_name': friend_info['last_name'],
+                        'login': friend_info['login'],
+                        'created_at': f.created_at.isoformat()
+                    })
+                else:
+                    logger.warning(f"Friend with id {f.friend_id} not found in user_service")
+
+            return friend_list, 200
         except Exception as e:
             logger.error(f'Error fetching friends: {str(e)}')
-            return jsonify({'message': 'Ошибка сервера'}), 500
+            return {'message': 'Ошибка сервера'}, 500
+
+@api.route('/friends/search')
+class SearchUsers(Resource):
+    @token_required
+    @api.doc(params={'query': 'Поисковый запрос (логин, имя или фамилия)'})
+    @api.marshal_with(search_result_model, as_list=True)
+    def get(self, user_id):
+        query = request.args.get('query', '').strip()
+        if not query:
+            return {'message': 'Параметр query обязателен!'}, 400
+
+        try:
+            logger.info(f"Searching users with query: {query} for user_id: {user_id}")
+            headers = {'Authorization': request.headers.get('Authorization')}
+            response = requests.get(
+                f"{app.config['USER_SERVICE_URL']}/users/search?query={query}",
+                headers=headers,
+                timeout=5
+            )
+            response.raise_for_status()
+            users = response.json()
+            return users, 200
+        except requests.ConnectionError:
+            logger.error(f"User service unavailable")
+            return {'message': 'Сервис пользователей недоступен!'}, 503
+        except requests.RequestException as e:
+            logger.error(f"Error searching users: {str(e)}")
+            return {'message': 'Ошибка поиска пользователей'}, 500
 
 if __name__ == '__main__':
     init_db()

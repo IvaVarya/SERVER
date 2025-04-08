@@ -1,5 +1,5 @@
 import logging
-from flask import Flask, request, make_response, send_from_directory, jsonify
+from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
@@ -26,10 +26,7 @@ metrics = PrometheusMetrics(app)
 api = Api(app, version='1.0', title='User Service API', 
           description='API для управления пользователями и их профилями')
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
-    'DATABASE_URL', 
-    'sqlite:///:memory:'
-)
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///:memory:')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key')
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
@@ -132,7 +129,7 @@ profile_model = api.model('Profile', {
     'gender': fields.String(required=False),
     'country': fields.String(required=False),
     'city': fields.String(required=False),
-    'birth_date': fields.String(required=False, description='Date in YYYY-MM-DD format (e.g., "2003-02-01")'),
+    'birth_date': fields.String(required=False, description='Date in YYYY-MM-DD format'),
     'profile_photo': fields.String(required=False)
 })
 
@@ -146,7 +143,7 @@ user_response_model = api.model('UserResponse', {
     'gender': fields.String,
     'country': fields.String,
     'city': fields.String,
-    'birth_date': fields.String(description='Date in YYYY-MM-DD format (e.g., "2003-02-01")'),
+    'birth_date': fields.String(description='Date in YYYY-MM-DD format'),
     'profile_photo': fields.String
 })
 
@@ -267,7 +264,7 @@ class Profile(Resource):
                     current_user.birth_date = datetime.datetime.strptime(birth_date_str, '%Y-%m-%d').date()
                 except (ValueError, TypeError) as e:
                     logger.error(f"Ошибка формата даты: {e}")
-                    return {'message': 'Некорректный формат даты, ожидается YYYY-MM-DD (например, "2003-02-01")'}, 400
+                    return {'message': 'Некорректный формат даты, ожидается YYYY-MM-DD'}, 400
 
             if 'profile_photo' in request.files:
                 file = request.files['profile_photo']
@@ -332,6 +329,34 @@ class Profile(Resource):
             'profile_photo': profile_photo_url
         }, 200
 
+@api.route('/users/<int:user_id>')
+class UserInfo(Resource):
+    @api.doc(security='Bearer Auth')
+    @token_required
+    @api.response(200, 'User info', user_response_model)
+    def get(self, current_user, user_id):
+        user = db.session.get(User, user_id)
+        if not user:
+            return {'message': 'Пользователь не найден!'}, 404
+
+        profile_photo_url = None
+        if user.profile_photo:
+            profile_photo_url = f"http://localhost:9000/{MINIO_BUCKET}/{user.profile_photo}"
+
+        return {
+            'id': user.id,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'login': user.login,
+            'email': user.email,
+            'registration_date': user.registration_date.isoformat(),
+            'gender': user.gender,
+            'country': user.country,
+            'city': user.city,
+            'birth_date': user.birth_date.strftime('%Y-%m-%d') if user.birth_date else None,
+            'profile_photo': profile_photo_url
+        }, 200
+
 @api.route('/users/search')
 class SearchUsers(Resource):
     @api.doc(security='Bearer Auth')
@@ -341,7 +366,7 @@ class SearchUsers(Resource):
     def get(self, current_user):
         query = request.args.get('query', '').strip()
         if not query:
-            return jsonify({'message': 'Параметр query обязателен!'}), 400
+            return {'message': 'Параметр query обязателен!'}, 400
 
         try:
             logger.info(f"Searching users with query: {query}")
@@ -359,7 +384,7 @@ class SearchUsers(Resource):
             } for user in users], 200
         except Exception as e:
             logger.error(f"Error searching users: {str(e)}")
-            return jsonify({'message': 'Ошибка сервера'}), 500
+            return {'message': 'Ошибка сервера'}, 500
 
 def allowed_file(filename):
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}

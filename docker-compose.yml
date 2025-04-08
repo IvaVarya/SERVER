@@ -48,27 +48,29 @@ services:
       - "5004:5004"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+      - USER_SERVICE_URL=http://user_service:5001  # Добавляем URL для user_service
     depends_on:
       - db
+      - user_service  # Явная зависимость от user_service
     networks:
       - backend
 
   sets_service:
     build: ./sets_service
     ports:
-    - "5005:5005"
+      - "5005:5005"
     environment:
-    - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
-    - SECRET_KEY=your-secret-key
-    - MINIO_ENDPOINT=minio:9000  
-    - MINIO_ACCESS_KEY=minioadmin
-    - MINIO_SECRET_KEY=minioadmin
-    - MINIO_BUCKET=set-photos
+      - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
+      - SECRET_KEY=your-secret-key
+      - MINIO_ENDPOINT=minio:9000  
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=set-photos
     depends_on:
-    - db
-    - minio
+      - db
+      - minio
     networks:
-    - backend
+      - backend
 
   db:
     image: postgres:13
