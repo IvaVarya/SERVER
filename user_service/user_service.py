@@ -1,5 +1,5 @@
 import logging
-from flask import Flask, request, make_response, send_from_directory
+from flask import Flask, request, make_response, send_from_directory, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
@@ -18,34 +18,28 @@ app = Flask(__name__)
 
 CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Настройка Prometheus
 metrics = PrometheusMetrics(app)
 
-# Настройка Swagger
 api = Api(app, version='1.0', title='User Service API', 
           description='API для управления пользователями и их профилями')
 
-# Конфигурация базы данных и приложения
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
     'DATABASE_URL', 
-    'sqlite:///:memory:'  # Запасной вариант для локального тестирования
+    'sqlite:///:memory:'
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key')
-app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # Ограничение размера файла - 5 MB
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 
-# Конфигурация MinIO
 MINIO_ENDPOINT = os.environ.get('MINIO_ENDPOINT', 'localhost:9000')
 MINIO_ACCESS_KEY = os.environ.get('MINIO_ACCESS_KEY', 'minioadmin')
 MINIO_SECRET_KEY = os.environ.get('MINIO_SECRET_KEY', 'minioadmin')
 MINIO_BUCKET = os.environ.get('MINIO_BUCKET', 'profile-photos')
-MINIO_SECURE = False  # Используй True, если настроишь HTTPS
+MINIO_SECURE = False
 
-# Инициализация клиента MinIO
 minio_client = Minio(
     MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -53,13 +47,11 @@ minio_client = Minio(
     secure=MINIO_SECURE
 )
 
-# Проверка и создание корзины с публичной политикой
 def init_minio():
     try:
         if not minio_client.bucket_exists(MINIO_BUCKET):
             minio_client.make_bucket(MINIO_BUCKET)
             logger.info(f"Создана корзина {MINIO_BUCKET} в MinIO")
-        # Устанавливаем публичную политику
         policy = {
             "Version": "2012-10-17",
             "Statement": [
@@ -79,7 +71,6 @@ def init_minio():
 
 db = SQLAlchemy(app)
 
-# Модель пользователя
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -101,34 +92,31 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-# Инициализация базы данных и MinIO
 def init_db():
     with app.app_context():
         db.create_all()
         init_minio()
 
-# Декоратор для проверки токена
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
         if not token:
-            return {'message': 'Token is missing!'}, 401
+            return jsonify({'message': 'Token is missing!'}), 401
         if token.startswith('Bearer '):
             token = token.split(' ')[1]
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             current_user = db.session.get(User, data['user_id'])
             if not current_user:
-                return {'message': 'User not found!'}, 401
+                return jsonify({'message': 'User not found!'}), 401
             return f(current_user=current_user, *args, **kwargs)
         except jwt.ExpiredSignatureError:
-            return {'message': 'Token has expired!'}, 401
+            return jsonify({'message': 'Token has expired!'}), 401
         except jwt.InvalidTokenError:
-            return {'message': 'Invalid token!'}, 401
+            return jsonify({'message': 'Invalid token!'}), 401
     return decorated
 
-# Модели для Swagger
 user_model = api.model('User', {
     'first_name': fields.String(required=True),
     'last_name': fields.String(required=True),
@@ -162,7 +150,13 @@ user_response_model = api.model('UserResponse', {
     'profile_photo': fields.String
 })
 
-# Регистрация и логин остаются без изменений
+search_result_model = api.model('SearchResult', {
+    'id': fields.Integer(description='ID пользователя'),
+    'login': fields.String(description='Логин пользователя'),
+    'first_name': fields.String(description='Имя'),
+    'last_name': fields.String(description='Фамилия')
+})
+
 @api.route('/register')
 class Register(Resource):
     @api.expect(user_model)
@@ -320,7 +314,6 @@ class Profile(Resource):
     @token_required
     @api.response(200, 'User profile', user_response_model)
     def get(self, current_user):
-        # Возвращаем прямой URL, так как бакет публичный
         profile_photo_url = None
         if current_user.profile_photo:
             profile_photo_url = f"http://localhost:9000/{MINIO_BUCKET}/{current_user.profile_photo}"
@@ -339,6 +332,35 @@ class Profile(Resource):
             'profile_photo': profile_photo_url
         }, 200
 
+@api.route('/users/search')
+class SearchUsers(Resource):
+    @api.doc(security='Bearer Auth')
+    @token_required
+    @api.doc(params={'query': 'Поисковый запрос (логин, имя или фамилия)'})
+    @api.marshal_with(search_result_model, as_list=True)
+    def get(self, current_user):
+        query = request.args.get('query', '').strip()
+        if not query:
+            return jsonify({'message': 'Параметр query обязателен!'}), 400
+
+        try:
+            logger.info(f"Searching users with query: {query}")
+            users = User.query.filter(
+                (User.login.ilike(f'%{query}%')) |
+                (User.first_name.ilike(f'%{query}%')) |
+                (User.last_name.ilike(f'%{query}%'))
+            ).all()
+
+            return [{
+                'id': user.id,
+                'login': user.login,
+                'first_name': user.first_name,
+                'last_name': user.last_name
+            } for user in users], 200
+        except Exception as e:
+            logger.error(f"Error searching users: {str(e)}")
+            return jsonify({'message': 'Ошибка сервера'}), 500
+
 def allowed_file(filename):
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -346,5 +368,3 @@ def allowed_file(filename):
 if __name__ == '__main__':
     init_db()
     app.run(host='0.0.0.0', port=5001)
-
-    

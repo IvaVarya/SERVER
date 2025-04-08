@@ -8,13 +8,12 @@ from functools import wraps
 from datetime import datetime
 from prometheus_flask_exporter import PrometheusMetrics
 from flask_cors import CORS
+import requests  # Добавляем для HTTP-запросов
 
 app = Flask(__name__)
 
-# Настройка CORS
 CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}}, supports_credentials=True)
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -22,10 +21,10 @@ metrics = PrometheusMetrics(app)
 
 api = Api(app, version='1.0', title='Friend Service API', description='API для управления друзьями')
 
-# Конфигурация приложения
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
+app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://localhost:5001')  # URL user_service
 
 db = SQLAlchemy(app)
 
@@ -34,7 +33,7 @@ class Friendship(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, nullable=False)
     friend_id = db.Column(db.Integer, nullable=False)
-    status = db.Column(db.String(20), default='pending')  # pending, accepted
+    status = db.Column(db.String(20), default='pending')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -192,22 +191,19 @@ class SearchFriends(Resource):
 
         try:
             logger.info(f"Searching friends for user_id: {user_id} with query: {query}")
-            from user_service import User
-            users = User.query.filter(
-                (User.login.ilike(f'%{query}%')) |
-                (User.first_name.ilike(f'%{query}%')) |
-                (User.last_name.ilike(f'%{query}%'))
-            ).filter(User.id != user_id).limit(10).all()
+            # Делаем запрос к user_service
+            user_service_url = f"{app.config['USER_SERVICE_URL']}/users/search?query={query}"
+            headers = {'Authorization': request.headers.get('Authorization')}
+            response = requests.get(user_service_url, headers=headers, timeout=5)
+            response.raise_for_status()  # Вызывает исключение при ошибке HTTP
 
-            return [{
-                'id': user.id,
-                'login': user.login,
-                'first_name': user.first_name,
-                'last_name': user.last_name
-            } for user in users], 200
-        except ImportError as e:
-            logger.error(f'Error importing user_service: {str(e)}')
-            return jsonify({'message': 'Ошибка сервера: отсутствует user_service'}), 500
+            users = response.json()
+            # Фильтруем текущего пользователя
+            users = [user for user in users if user['id'] != user_id]
+            return users[:10], 200  # Ограничиваем до 10 результатов
+        except requests.RequestException as e:
+            logger.error(f'Error calling user_service: {str(e)}')
+            return jsonify({'message': 'Ошибка при запросе к user_service'}), 500
         except Exception as e:
             logger.error(f'Error searching friends: {str(e)}')
             return jsonify({'message': 'Ошибка сервера'}), 500
