@@ -24,7 +24,7 @@ api = Api(app, version='1.0', title='Friend Service API', description='API дл�
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
-app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://localhost:5001')
+app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://localhost:5002')  # Исправленный порт
 
 db = SQLAlchemy(app)
 
@@ -117,7 +117,8 @@ search_result_model = api.model('SearchResult', {
     'id': fields.Integer(description='ID пользователя'),
     'login': fields.String(description='Логин пользователя'),
     'first_name': fields.String(description='Имя'),
-    'last_name': fields.String(description='Фамилия')
+    'last_name': fields.String(description='Фамилия'),
+    'profile_photo': fields.String(description='URL фото профиля')  # Добавляем поле для фото
 })
 
 @api.route('/friends/request')
@@ -240,6 +241,57 @@ class GetFriends(Resource):
         except Exception as e:
             logger.error(f'Error fetching friends: {str(e)}')
             return {'message': 'Ошибка сервера'}, 500
+
+@api.route('/friends/requests/incoming')
+class IncomingFriendRequests(Resource):
+    @token_required
+    @api.marshal_with(friend_model, as_list=True)
+    def get(self, user_id):
+        logger.info(f'Fetching incoming friend requests for user_id: {user_id}')
+        try:
+            requests = Friendship.query.filter_by(friend_id=user_id, status='pending').all()
+            logger.info(f'Found {len(requests)} incoming requests')
+            incoming_requests = []
+            for req in requests:
+                user_info = get_user_info(req.user_id)
+                if user_info:
+                    incoming_requests.append({
+                        'friend_id': req.user_id,
+                        'first_name': user_info['first_name'],
+                        'last_name': user_info['last_name'],
+                        'login': user_info['login'],
+                        'created_at': req.created_at.isoformat()
+                    })
+                else:
+                    logger.warning(f"User with id {req.user_id} not found in user_service")
+            return incoming_requests
+        except Exception as e:
+            logger.error(f'Error fetching incoming requests: {str(e)}')
+            return {'message': f'Ошибка при получении входящих запросов: {str(e)}'}, 500
+
+@api.route('/friends/reject')
+class RejectFriend(Resource):
+    @token_required
+    @api.expect(friend_request_model)
+    def post(self, user_id):
+        data = request.get_json()
+        friend_id = data.get('friend_id')
+        if not friend_id:
+            return {'message': 'friend_id обязателен!'}, 400
+        
+        friendship = Friendship.query.filter_by(user_id=friend_id, friend_id=user_id, status='pending').first()
+        if not friendship:
+            return {'message': 'Запрос в друзья не найден!'}, 404
+
+        try:
+            db.session.delete(friendship)
+            db.session.commit()
+            logger.info(f'Friend request from user_id: {friend_id} to user_id: {user_id} rejected')
+            return {'message': 'Запрос отклонен!'}, 200
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'Error rejecting friend request: {str(e)}')
+            return {'message': f'Ошибка сервера: {str(e)}'}, 500
 
 @api.route('/friends/search')
 class SearchUsers(Resource):

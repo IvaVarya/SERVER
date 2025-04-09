@@ -151,7 +151,8 @@ search_result_model = api.model('SearchResult', {
     'id': fields.Integer(description='ID пользователя'),
     'login': fields.String(description='Логин пользователя'),
     'first_name': fields.String(description='Имя'),
-    'last_name': fields.String(description='Фамилия')
+    'last_name': fields.String(description='Фамилия'),
+    'profile_photo': fields.String(description='URL фото профиля')  # Добавляем поле для фото
 })
 
 @api.route('/register')
@@ -380,7 +381,8 @@ class SearchUsers(Resource):
                 'id': user.id,
                 'login': user.login,
                 'first_name': user.first_name,
-                'last_name': user.last_name
+                'last_name': user.last_name,
+                'profile_photo': f"http://localhost:9000/{MINIO_BUCKET}/{user.profile_photo}" if user.profile_photo else None
             } for user in users], 200
         except Exception as e:
             logger.error(f"Error searching users: {str(e)}")
