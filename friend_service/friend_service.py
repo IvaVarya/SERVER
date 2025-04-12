@@ -24,7 +24,7 @@ api = Api(app, version='1.0', title='Friend Service API', description='API дл�
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
-app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://localhost:5002')  # Исправленный порт
+app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://user_service:5001')  # Исправлено
 
 db = SQLAlchemy(app)
 
@@ -52,17 +52,17 @@ def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
-        logger.info(f"Received Authorization header: {token}")
+        logger.debug(f"Received Authorization header: {token}")
         if not token:
             logger.warning('Token is missing!')
             return {'message': 'Токен отсутствует!'}, 401
         try:
             if token.startswith('Bearer '):
                 token = token.split(' ')[1]
-            logger.info(f"Extracted token: {token}")
+            logger.debug(f"Extracted token: {token[:10]}...")
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            logger.info(f"Decoded token data: {data}")
             kwargs['user_id'] = data['user_id']
+            logger.info(f"Decoded user_id: {kwargs['user_id']}")
         except jwt.InvalidTokenError as e:
             logger.warning(f'Token is invalid: {str(e)}')
             return {'message': 'Неверный токен!'}, 401
@@ -72,34 +72,95 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
+def get_user_info(user_id, auth_token=None):
+    """
+    Получает информацию о пользователе из user_service.
+
+    Args:
+        user_id (int): ID пользователя.
+        auth_token (str, optional): JWT-токен для аутентификации. Если None, берется из текущего запроса.
+
+    Returns:
+        dict: Данные пользователя {'id', 'first_name', 'last_name', 'login'} или None, если пользователь не найден.
+    """
+    try:
+        # Используем переданный токен или берем из текущего запроса
+        headers = {}
+        if auth_token:
+            headers['Authorization'] = auth_token
+        elif hasattr(request, 'headers'):
+            headers['Authorization'] = request.headers.get('Authorization')
+        else:
+            logger.error(f"No authorization token provided for user_id {user_id}")
+            return None
+
+        if not headers.get('Authorization'):
+            logger.error(f"Missing Authorization header for user_id {user_id}")
+            return None
+
+        # Запрос к user_service
+        logger.debug(f"Requesting user info for user_id {user_id} from {app.config['USER_SERVICE_URL']}")
+        response = requests.get(
+            f"{app.config['USER_SERVICE_URL']}/users/{user_id}",
+            headers=headers,
+            timeout=3
+        )
+        response.raise_for_status()  # Вызывает исключение для статусов 4xx/5xx
+
+        # Проверка формата ответа
+        try:
+            user_data = response.json()
+            required_keys = {'id', 'first_name', 'last_name', 'login'}
+            if not isinstance(user_data, dict) or not all(key in user_data for key in required_keys):
+                logger.error(f"Invalid user data format for user_id {user_id}: {user_data}")
+                return None
+            return {
+                'id': user_data['id'],
+                'first_name': user_data['first_name'],
+                'last_name': user_data['last_name'],
+                'login': user_data['login']
+            }
+        except ValueError:
+            logger.error(f"Failed to parse JSON for user_id {user_id}: {response.text}")
+            return None
+
+    except requests.HTTPError as e:
+        if response.status_code == 404:
+            logger.warning(f"User not found for user_id {user_id}")
+            return None
+        logger.error(f"HTTP error fetching user info for user_id {user_id}: {str(e)}, status: {response.status_code}, body: {response.text}")
+        return None
+    except requests.ConnectionError:
+        logger.error(f"User service unavailable for user_id {user_id}")
+        return None
+    except requests.Timeout:
+        logger.error(f"Timeout fetching user info for user_id {user_id}")
+        return None
+    except requests.RequestException as e:
+        logger.error(f"Unexpected error fetching user info for user_id {user_id}: {str(e)}")
+        return None
+
 def check_user_exists(user_id):
+    """
+    Проверяет существование пользователя через user_service.
+    """
     try:
         headers = {'Authorization': request.headers.get('Authorization')}
-        response = requests.get(f"{app.config['USER_SERVICE_URL']}/users/{user_id}", headers=headers, timeout=5)
+        response = requests.get(f"{app.config['USER_SERVICE_URL']}/users/{user_id}", headers=headers, timeout=3)
         response.raise_for_status()
         return True
+    except requests.HTTPError as e:
+        if response.status_code == 404:
+            logger.warning(f"User not found for user_id {user_id}")
+            return False
+        logger.error(f"HTTP error checking user_id {user_id}: {str(e)}, status: {response.status_code}")
+        raise Exception("Ошибка проверки пользователя")
     except requests.ConnectionError:
         logger.error(f"User service unavailable for user_id {user_id}")
         raise Exception("Сервис пользователей недоступен!")
     except requests.RequestException as e:
-        logger.error(f"Error checking user {user_id} existence: {str(e)}")
-        return False
-
-def get_user_info(user_id):
-    try:
-        headers = {'Authorization': request.headers.get('Authorization')}
-        response = requests.get(f"{app.config['USER_SERVICE_URL']}/users/{user_id}", headers=headers, timeout=5)
-        response.raise_for_status()
-        user_data = response.json()
-        return {
-            'id': user_data['id'],
-            'first_name': user_data['first_name'],
-            'last_name': user_data['last_name'],
-            'login': user_data['login']
-        }
-    except requests.RequestException as e:
-        logger.error(f"Error fetching user info for {user_id}: {str(e)}")
-        return None
+        logger.error(f"Error checking user_id {user_id} existence: {str(e)}")
+        raise Exception("Ошибка проверки пользователя")
 
 friend_request_model = api.model('FriendRequestModel', {
     'friend_id': fields.Integer(required=True, description='ID пользователя для добавления в друзья')
@@ -118,7 +179,7 @@ search_result_model = api.model('SearchResult', {
     'login': fields.String(description='Логин пользователя'),
     'first_name': fields.String(description='Имя'),
     'last_name': fields.String(description='Фамилия'),
-    'profile_photo': fields.String(description='URL фото профиля')  # Добавляем поле для фото
+    'profile_photo': fields.String(description='URL фото профиля')
 })
 
 @api.route('/friends/request')
@@ -137,6 +198,7 @@ class FriendRequest(Resource):
             if not check_user_exists(friend_id):
                 return {'message': 'Пользователь с таким friend_id не существует!'}, 404
         except Exception as e:
+            logger.error(f"Failed to check user existence for friend_id {friend_id}: {str(e)}")
             return {'message': str(e)}, 503
 
         existing = Friendship.query.filter_by(user_id=user_id, friend_id=friend_id).first()
@@ -168,6 +230,7 @@ class AcceptFriend(Resource):
             if not check_user_exists(friend_id):
                 return {'message': 'Пользователь с таким friend_id не существует!'}, 404
         except Exception as e:
+            logger.error(f"Failed to check user existence for friend_id {friend_id}: {str(e)}")
             return {'message': str(e)}, 503
 
         friendship = Friendship.query.filter_by(user_id=friend_id, friend_id=user_id, status='pending').first()
@@ -194,6 +257,7 @@ class DeleteFriend(Resource):
             if not check_user_exists(friend_id):
                 return {'message': 'Пользователь с таким friend_id не существует!'}, 404
         except Exception as e:
+            logger.error(f"Failed to check user existence for friend_id {friend_id}: {str(e)}")
             return {'message': str(e)}, 503
 
         friendship = Friendship.query.filter_by(user_id=user_id, friend_id=friend_id, status='accepted').first()
@@ -224,8 +288,9 @@ class GetFriends(Resource):
             logger.info(f"Found {len(friends)} friends")
 
             friend_list = []
+            auth_token = request.headers.get('Authorization')
             for f in friends:
-                friend_info = get_user_info(f.friend_id)
+                friend_info = get_user_info(f.friend_id, auth_token=auth_token)
                 if friend_info:
                     friend_list.append({
                         'friend_id': f.friend_id,
@@ -235,11 +300,12 @@ class GetFriends(Resource):
                         'created_at': f.created_at.isoformat()
                     })
                 else:
-                    logger.warning(f"Friend with id {f.friend_id} not found in user_service")
+                    logger.warning(f"Skipping friend with id {f.friend_id}: user info not available")
+                    # Пропускаем друга, вместо сбоя
 
             return friend_list, 200
         except Exception as e:
-            logger.error(f'Error fetching friends: {str(e)}')
+            logger.error(f"Error fetching friends for user_id {user_id}: {str(e)}")
             return {'message': 'Ошибка сервера'}, 500
 
 @api.route('/friends/requests/incoming')
@@ -252,8 +318,9 @@ class IncomingFriendRequests(Resource):
             requests = Friendship.query.filter_by(friend_id=user_id, status='pending').all()
             logger.info(f'Found {len(requests)} incoming requests')
             incoming_requests = []
+            auth_token = request.headers.get('Authorization')
             for req in requests:
-                user_info = get_user_info(req.user_id)
+                user_info = get_user_info(req.user_id, auth_token=auth_token)
                 if user_info:
                     incoming_requests.append({
                         'friend_id': req.user_id,
@@ -263,11 +330,11 @@ class IncomingFriendRequests(Resource):
                         'created_at': req.created_at.isoformat()
                     })
                 else:
-                    logger.warning(f"User with id {req.user_id} not found in user_service")
-            return incoming_requests
+                    logger.warning(f"Skipping request from user_id {req.user_id}: user info not available")
+            return incoming_requests, 200
         except Exception as e:
-            logger.error(f'Error fetching incoming requests: {str(e)}')
-            return {'message': f'Ошибка при получении входящих запросов: {str(e)}'}, 500
+            logger.error(f"Error fetching incoming requests for user_id {user_id}: {str(e)}")
+            return {'message': 'Ошибка сервера'}, 500
 
 @api.route('/friends/reject')
 class RejectFriend(Resource):
@@ -291,7 +358,7 @@ class RejectFriend(Resource):
         except Exception as e:
             db.session.rollback()
             logger.error(f'Error rejecting friend request: {str(e)}')
-            return {'message': f'Ошибка сервера: {str(e)}'}, 500
+            return {'message': 'Ошибка сервера'}, 500
 
 @api.route('/friends/search')
 class SearchUsers(Resource):
@@ -309,11 +376,14 @@ class SearchUsers(Resource):
             response = requests.get(
                 f"{app.config['USER_SERVICE_URL']}/users/search?query={query}",
                 headers=headers,
-                timeout=5
+                timeout=3
             )
             response.raise_for_status()
             users = response.json()
             return users, 200
+        except requests.HTTPError as e:
+            logger.error(f"HTTP error searching users: {str(e)}, status: {response.status_code}")
+            return {'message': 'Ошибка поиска пользователей'}, 500
         except requests.ConnectionError:
             logger.error(f"User service unavailable")
             return {'message': 'Сервис пользователей недоступен!'}, 503
