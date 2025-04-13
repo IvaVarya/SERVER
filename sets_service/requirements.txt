@@ -4,6 +4,7 @@ psycopg2-binary
 flask-restx
 prometheus_flask_exporter
 flask-admin
+flask_wtf
 flask_cors
 pyjwt
 minio

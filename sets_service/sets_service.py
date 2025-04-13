@@ -1,18 +1,20 @@
 import logging
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_restx import Api, Resource, fields
 from flask_admin import Admin
 from flask_admin.contrib.sqla import ModelView
+from flask_admin.form import SecureForm
+from flask_wtf.file import FileField, FileAllowed
+from wtforms import validators, Form, StringField, IntegerField, TextAreaField
 from prometheus_flask_exporter import PrometheusMetrics
 import os
-import jwt
-from functools import wraps
 from flask_cors import CORS
 from minio import Minio
 from minio.error import S3Error
 import json
 from datetime import datetime
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
@@ -31,12 +33,12 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024  # Ограничение размера файла - 5 MB
 
-# Конфигурация MinIO (взято из user_service)
-MINIO_ENDPOINT = os.environ.get('MINIO_ENDPOINT', 'localhost:9000')
+# Конфигурация MinIO
+MINIO_ENDPOINT = os.environ.get('MINIO_ENDPOINT', 'minio:9000')
 MINIO_ACCESS_KEY = os.environ.get('MINIO_ACCESS_KEY', 'minioadmin')
 MINIO_SECRET_KEY = os.environ.get('MINIO_SECRET_KEY', 'minioadmin')
-MINIO_BUCKET = os.environ.get('MINIO_BUCKET', 'set-photos')  # Отдельная корзина для sets
-MINIO_SECURE = False  # Как в user_service
+MINIO_BUCKET = os.environ.get('MINIO_BUCKET', 'set-photos')
+MINIO_SECURE = False
 
 # Инициализация клиента MinIO
 minio_client = Minio(
@@ -46,13 +48,12 @@ minio_client = Minio(
     secure=MINIO_SECURE
 )
 
-# Проверка и создание корзины с публичной политикой (взято из user_service)
+# Проверка и создание корзины с публичной политикой
 def init_minio():
     try:
         if not minio_client.bucket_exists(MINIO_BUCKET):
             minio_client.make_bucket(MINIO_BUCKET)
             logger.info(f"Создана корзина {MINIO_BUCKET} в MinIO")
-        # Устанавливаем публичную политику
         policy = {
             "Version": "2012-10-17",
             "Statement": [
@@ -98,30 +99,31 @@ class FavoriteSet(db.Model):
 
 # Функция для инициализации базы данных с предопределёнными наборами
 def init_db():
-    if Set.query.count() == 0:
-        default_sets = [
-            Set(
-                manufacturer="DMC",
-                name="Цветочный сад",
-                category="Природа",
-                description="Набор для вышивания крестиком с изображением цветочного сада.",
-                width=150,
-                height=100,
-                photo="https://i.pinimg.com/736x/d6/5e/85/d65e859db614052853cc08f04999c6be.jpg"
-            ),
-            Set(
-                manufacturer="Riolis",
-                name="Зимний лес",
-                category="Пейзаж",
-                description="Зимний пейзаж с деревьями и снегом для вышивания крестиком.",
-                width=200,
-                height=150,
-                photo="https://cdn1.ozone.ru/s3/multimedia-6/c600/6289401306.jpg"
-            )
-        ]
-        db.session.bulk_save_objects(default_sets)
-        db.session.commit()
-        logger.info("Добавлены предопределённые наборы для вышивания с внешними URL.")
+    with app.app_context():
+        if Set.query.count() == 0:
+            default_sets = [
+                Set(
+                    manufacturer="DMC",
+                    name="Цветочный сад",
+                    category="Природа",
+                    description="Набор для вышивания крестиком с изображением цветочного сада.",
+                    width=150,
+                    height=100,
+                    photo="https://i.pinimg.com/736x/d6/5e/85/d65e859db614052853cc08f04999c6be.jpg"
+                ),
+                Set(
+                    manufacturer="Riolis",
+                    name="Зимний лес",
+                    category="Пейзаж",
+                    description="Зимний пейзаж с деревьями и снегом для вышивания крестиком.",
+                    width=200,
+                    height=150,
+                    photo="https://cdn1.ozone.ru/s3/multimedia-6/c600/6289401306.jpg"
+                )
+            ]
+            db.session.bulk_save_objects(default_sets)
+            db.session.commit()
+            logger.info("Добавлены предопределённые наборы для вышивания с внешними URL.")
 
 # Инициализация базы данных и MinIO
 def init_app():
@@ -130,11 +132,10 @@ def init_app():
         init_db()
         init_minio()
 
-# Вызываем инициализацию при запуске модуля
-init_app()
-
 # Декоратор для проверки токена
 def token_required(f):
+    from functools import wraps
+    import jwt
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
@@ -188,7 +189,7 @@ class SearchSets(Resource):
             'description': s.description,
             'width': s.width,
             'height': s.height,
-            'photo': f"http://{MINIO_ENDPOINT}/{MINIO_BUCKET}/{s.photo}" if s.photo and not s.photo.startswith('http') else s.photo
+            'photo': f"http://localhost:9000/{MINIO_BUCKET}/{s.photo}" if s.photo and not s.photo.startswith('http') else s.photo
         } for s in sets], 200
 
 # Эндпоинты для избранного
@@ -261,49 +262,148 @@ class GetFavorites(Resource):
             'description': f.set.description,
             'width': f.set.width,
             'height': f.set.height,
-            'photo': f"http://{MINIO_ENDPOINT}/{MINIO_BUCKET}/{f.set.photo}" if f.set.photo and not f.set.photo.startswith('http') else f.set.photo
+            'photo': f"http://localhost:9000/{MINIO_BUCKET}/{f.set.photo}" if f.set.photo and not f.set.photo.startswith('http') else f.set.photo
         } for f in favorites], 200
 
-# Flask-Admin с поддержкой загрузки фото в MinIO
-class SetAdmin(ModelView):
-    column_list = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']
-    form_columns = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']
-
-    def on_model_change(self, form, model, is_created):
-        if 'photo' in request.files and request.files['photo']:
-            file = request.files['photo']
-            if file and allowed_file(file.filename):
-                filename = f"set_{model.id or datetime.utcnow().timestamp()}_{file.filename}"
-                try:
-                    minio_client.put_object(
-                        MINIO_BUCKET,
-                        filename,
-                        file.stream,
-                        length=-1,
-                        part_size=5*1024*1024,
-                        content_type=file.content_type
-                    )
-                    model.photo = filename
-                    logger.info(f"Фото {filename} загружено в MinIO")
-                except S3Error as e:
-                    logger.error(f"Ошибка загрузки в MinIO: {e}")
-                    raise Exception("Ошибка загрузки фото")
-            else:
-                raise Exception("Недопустимый формат файла (PNG, JPG, JPEG)")
-
+# Проверка допустимых форматов файлов
 def allowed_file(filename):
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# Кастомизация формы для поддержки загрузки файлов
+class SetAdminForm(Form):
+    manufacturer = StringField('Manufacturer', [validators.DataRequired()])
+    name = StringField('Name', [validators.DataRequired()])
+    category = StringField('Category', [validators.DataRequired()])
+    description = TextAreaField('Description', [validators.DataRequired()])
+    width = IntegerField('Width', [validators.DataRequired()])
+    height = IntegerField('Height', [validators.DataRequired()])
+    photo = FileField('Photo', validators=[FileAllowed(['jpg', 'jpeg', 'png'], 'Images only!')])
+
+# Кастомный ModelView для Set
+class SetAdmin(ModelView):
+    form = SetAdminForm
+    column_list = ['manufacturer', 'name', 'category', 'width', 'height', 'photo']
+    form_columns = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']
+    
+    # Отображение фотографии в списке
+    def _photo_formatter(view, context, model, name):
+        if model.photo and not model.photo.startswith('http'):
+            return f'<a href="http://localhost:9000/{MINIO_BUCKET}/{model.photo}" target="_blank">View Photo</a>'
+        elif model.photo:
+            return f'<a href="{model.photo}" target="_blank">View Photo</a>'
+        return ''
+
+    column_formatters = {
+        'photo': _photo_formatter
+    }
+
+    def create_model(self, form):
+        try:
+            model = self.model()
+            # Вручную заполняем поля, исключая photo
+            model.manufacturer = form.manufacturer.data
+            model.name = form.name.data
+            model.category = form.category.data
+            model.description = form.description.data
+            model.width = form.width.data
+            model.height = form.height.data
+            
+            # Добавляем модель в сессию и получаем ID
+            self.session.add(model)
+            self.session.flush()  # Получаем model.id без коммита
+
+            # Обрабатываем фото, если оно загружено
+            if form.photo.data:
+                file = form.photo.data
+                if file and allowed_file(file.filename):
+                    filename = f"set_{model.id}_{datetime.utcnow().timestamp()}_{secure_filename(file.filename)}"
+                    try:
+                        minio_client.put_object(
+                            MINIO_BUCKET,
+                            filename,
+                            file.stream,
+                            length=-1,
+                            part_size=5*1024*1024,
+                            content_type=file.mimetype
+                        )
+                        model.photo = filename
+                        logger.info(f"Фотография {filename} загружена в MinIO")
+                    except S3Error as e:
+                        logger.error(f"Ошибка загрузки в MinIO: {e}")
+                        self.session.rollback()
+                        raise ValueError("Ошибка загрузки фотографии в MinIO")
+                else:
+                    self.session.rollback()
+                    raise ValueError("Недопустимый формат файла (PNG, JPG, JPEG)")
+
+            self.session.commit()
+            self.after_model_change(form, model, True)
+            return model
+        except Exception as ex:
+            logger.error(f"Ошибка создания записи: {str(ex)}")
+            self.session.rollback()
+            raise
+
+    def update_model(self, form, model):
+        try:
+            # Вручную обновляем поля, исключая photo
+            model.manufacturer = form.manufacturer.data
+            model.name = form.name.data
+            model.category = form.category.data
+            model.description = form.description.data
+            model.width = form.width.data
+            model.height = form.height.data
+
+            # Обрабатываем фото, если оно загружено
+            if form.photo.data:
+                file = form.photo.data
+                if file and allowed_file(file.filename):
+                    # Удаляем старую фотографию, если она есть
+                    if model.photo and not model.photo.startswith('http'):
+                        try:
+                            minio_client.remove_object(MINIO_BUCKET, model.photo)
+                            logger.info(f"Старая фотография {model.photo} удалена из MinIO")
+                        except S3Error as e:
+                            logger.error(f"Ошибка удаления старой фотографии: {e}")
+
+                    filename = f"set_{model.id}_{datetime.utcnow().timestamp()}_{secure_filename(file.filename)}"
+                    try:
+                        minio_client.put_object(
+                            MINIO_BUCKET,
+                            filename,
+                            file.stream,
+                            length=-1,
+                            part_size=5*1024*1024,
+                            content_type=file.mimetype
+                        )
+                        model.photo = filename
+                        logger.info(f"Фотография {filename} загружена в MinIO")
+                    except S3Error as e:
+                        logger.error(f"Ошибка загрузки в MinIO: {e}")
+                        self.session.rollback()
+                        raise ValueError("Ошибка загрузки фотографии в MinIO")
+                else:
+                    self.session.rollback()
+                    raise ValueError("Недопустимый формат файла (PNG, JPG, JPEG)")
+
+            self.session.commit()
+            self.after_model_change(form, model, False)
+            return True
+        except Exception as ex:
+            logger.error(f"Ошибка обновления записи: {str(ex)}")
+            self.session.rollback()
+            return False
+
 class FavoriteSetAdmin(ModelView):
     column_list = ['user_id', 'set_id', 'added_at']
     form_columns = ['user_id', 'set_id']
+    form_base_class = SecureForm
 
 admin = Admin(app, name='Sets Admin', template_mode='bootstrap3')
 admin.add_view(SetAdmin(Set, db.session))
 admin.add_view(FavoriteSetAdmin(FavoriteSet, db.session))
 
 if __name__ == '__main__':
+    init_app()
     app.run(host='0.0.0.0', port=5005)
-
-    
