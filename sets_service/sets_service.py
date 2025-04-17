@@ -219,22 +219,17 @@ class AddFavorite(Resource):
             return {'message': 'Набор добавлен в избранное!'}, 201
         except Exception as e:
             db.session.rollback()
-            logger.error(f'Error adding favorite: {str(e)}')
-            return {'message': 'Ошибка сервера'}, 500
+            logger.error(f'Error adding favorite: {str(e)}', exc_info=True)
+            return {'message': 'Ошибка сервера', 'error': str(e)}, 500
 
-@api.route('/favorites/remove')
+@api.route('/favorites/<int:set_id>')
 class RemoveFavorite(Resource):
     @token_required
-    @api.expect(favorite_model)
-    @api.doc(responses={200: 'Набор удален из избранного', 404: 'Набор не найден в избранном'})
-    def post(self, user_id):
-        data = request.get_json()
-        set_id = data.get('set_id')
-        if not set_id:
-            return {'message': 'set_id обязателен!'}, 400
-
+    @api.doc(responses={200: 'Набор удален из избранного', 404: 'Набор не найден в избранном', 401: 'Токен неверный'})
+    def delete(self, user_id, set_id):
         favorite = FavoriteSet.query.filter_by(user_id=user_id, set_id=set_id).first()
         if not favorite:
+            logger.warning(f'Favorite set {set_id} not found for user_id: {user_id}')
             return {'message': 'Набор не найден в избранном!'}, 404
 
         try:
@@ -244,8 +239,8 @@ class RemoveFavorite(Resource):
             return {'message': 'Набор удален из избранного!'}, 200
         except Exception as e:
             db.session.rollback()
-            logger.error(f'Error removing favorite: {str(e)}')
-            return {'message': 'Ошибка сервера'}, 500
+            logger.error(f'Error removing favorite: {str(e)}', exc_info=True)
+            return {'message': 'Ошибка сервера', 'error': str(e)}, 500
 
 @api.route('/favorites')
 class GetFavorites(Resource):
@@ -253,17 +248,21 @@ class GetFavorites(Resource):
     @api.marshal_with(set_model, as_list=True)
     @api.doc(responses={200: 'Список избранных наборов', 401: 'Токен неверный'})
     def get(self, user_id):
-        favorites = FavoriteSet.query.filter_by(user_id=user_id).join(Set).all()
-        return [{
-            'id': f.set.id,
-            'manufacturer': f.set.manufacturer,
-            'name': f.set.name,
-            'category': f.set.category,
-            'description': f.set.description,
-            'width': f.set.width,
-            'height': f.set.height,
-            'photo': f"http://localhost:9000/{MINIO_BUCKET}/{f.set.photo}" if f.set.photo and not f.set.photo.startswith('http') else f.set.photo
-        } for f in favorites], 200
+        try:
+            favorites = FavoriteSet.query.filter_by(user_id=user_id).join(Set).all()
+            return [{
+                'id': f.set.id,
+                'manufacturer': f.set.manufacturer,
+                'name': f.set.name,
+                'category': f.set.category,
+                'description': f.set.description,
+                'width': f.set.width,
+                'height': f.set.height,
+                'photo': f"http://localhost:9000/{MINIO_BUCKET}/{f.set.photo}" if f.set.photo and not f.set.photo.startswith('http') else f.set.photo
+            } for f in favorites], 200
+        except Exception as e:
+            logger.error(f'Error getting favorites: {str(e)}', exc_info=True)
+            return {'message': 'Ошибка сервера', 'error': str(e)}, 500
 
 # Проверка допустимых форматов файлов
 def allowed_file(filename):
@@ -283,7 +282,7 @@ class SetAdminForm(Form):
 # Кастомный ModelView для Set
 class SetAdmin(ModelView):
     form = SetAdminForm
-    column_list = ['manufacturer', 'name', 'category', 'width', 'height', 'photo']
+    column_list = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']
     form_columns = ['manufacturer', 'name', 'category', 'description', 'width', 'height', 'photo']
     
     # Отображение фотографии в списке

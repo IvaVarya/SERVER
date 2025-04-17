@@ -6,13 +6,16 @@ services:
       - "5001:5001"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
-      - MINIO_ENDPOINT=minio:9000 
-      - MINIO_ACCESS_KEY=minioadmin  
-      - MINIO_SECRET_KEY=minioadmin 
-      - MINIO_BUCKET=profile-photos  
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=profile-photos
+      - SECRET_KEY=your-secret-key
     depends_on:
-      - db
-      - minio
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     networks:
       - backend
 
@@ -26,9 +29,12 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - MINIO_BUCKET=post-photos
+      - SECRET_KEY=your-secret-key
     depends_on:
-      - db
-      - minio
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     networks:
       - backend
 
@@ -36,6 +42,8 @@ services:
     build: ./feed_service
     ports:
       - "5003:5003"
+    environment:
+      - SECRET_KEY=your-secret-key
     depends_on:
       - post_service
       - friend_service
@@ -48,10 +56,13 @@ services:
       - "5004:5004"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
-      - USER_SERVICE_URL=http://user_service:5001  # Добавляем URL для user_service
+      - USER_SERVICE_URL=http://user_service:5001
+      - SECRET_KEY=your-secret-key
     depends_on:
-      - db
-      - user_service  # Явная зависимость от user_service
+      db:
+        condition: service_healthy
+      user_service:
+        condition: service_started
     networks:
       - backend
 
@@ -61,14 +72,16 @@ services:
       - "5005:5005"
     environment:
       - DATABASE_URL=postgresql://postgres:server@db:5432/PostgreSQL
-      - SECRET_KEY=your-secret-key
-      - MINIO_ENDPOINT=minio:9000  
+      - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - MINIO_BUCKET=set-photos
+      - SECRET_KEY=your-secret-key
     depends_on:
-      - db
-      - minio
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     networks:
       - backend
 
@@ -84,20 +97,30 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   minio:
     image: minio/minio:latest
     ports:
-      - "9000:9000"  
-      - "9001:9001"  
+      - "9000:9000"
+      - "9001:9001"
     environment:
-      - MINIO_ROOT_USER=minioadmin  
-      - MINIO_ROOT_PASSWORD=minioadmin 
-    command: server /data --console-address ":9001"  
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
     volumes:
-      - minio_data:/data  
+      - minio_data:/data
     networks:
       - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   prometheus:
     image: prom/prometheus
@@ -117,7 +140,7 @@ services:
 
 volumes:
   postgres_data:
-  minio_data: 
+  minio_data:
 
 networks:
   backend:
