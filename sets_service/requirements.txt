@@ -2,9 +2,9 @@ Flask
 Flask-SQLAlchemy
 psycopg2-binary
 flask-restx
-prometheus_flask_exporter
+prometheus-flask-exporter
 flask-admin
-flask_wtf
-flask_cors
+flask-wtf
+flask-cors
 pyjwt
 minio

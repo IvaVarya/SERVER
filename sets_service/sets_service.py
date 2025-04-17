@@ -119,6 +119,15 @@ def init_db():
                     width=200,
                     height=150,
                     photo="https://cdn1.ozone.ru/s3/multimedia-6/c600/6289401306.jpg"
+                ),
+                Set(
+                    manufacturer="Астра",
+                    name="Премиум",
+                    category="Цветы",
+                    description="Набор для вышивания с цветочными мотивами.",
+                    width=15,
+                    height=20,
+                    photo="set_3_1744827081.416665_CJRC1269.JPG"
                 )
             ]
             db.session.bulk_save_objects(default_sets)
@@ -173,14 +182,37 @@ favorite_model = api.model('Favorite', {
 @api.route('/search')
 class SearchSets(Resource):
     @api.marshal_with(set_model, as_list=True)
-    @api.doc(params={'q': 'Поисковый запрос (имя, производитель или категория)'})
+    @api.doc(params={'q': 'Поисковый запрос (имя, производитель, категория, ширина или высота)'})
     def get(self):
         query = request.args.get('q', '').strip()
-        sets = Set.query.filter(
-            (Set.name.ilike(f'%{query}%')) |
-            (Set.manufacturer.ilike(f'%{query}%')) |
-            (Set.category.ilike(f'%{query}%'))
-        ).all()
+        if not query:
+            return [], 200
+
+        # Разбиваем запрос на слова
+        query_terms = query.split()
+        filters = []
+        for term in query_terms:
+            try:
+                # Проверяем, является ли термин числом (для width и height)
+                num = int(term)
+                filters.append((Set.width == num) | (Set.height == num))
+            except ValueError:
+                # Если не число, ищем в текстовых полях
+                filters.append(
+                    (Set.name.ilike(f'%{term}%')) |
+                    (Set.manufacturer.ilike(f'%{term}%')) |
+                    (Set.category.ilike(f'%{term}%'))
+                )
+
+        # Комбинируем фильтры с AND
+        if filters:
+            query_filter = filters[0]
+            for f in filters[1:]:
+                query_filter = query_filter & f
+            sets = Set.query.filter(query_filter).all()
+        else:
+            sets = Set.query.all()
+
         return [{
             'id': s.id,
             'manufacturer': s.manufacturer,
