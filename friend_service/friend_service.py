@@ -24,7 +24,7 @@ api = Api(app, version='1.0', title='Friend Service API', description='API дл�
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://postgres:server@db:5432/PostgreSQL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key')
-app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://user_service:5001')  # Исправлено
+app.config['USER_SERVICE_URL'] = os.getenv('USER_SERVICE_URL', 'http://user_service:5001')
 
 db = SQLAlchemy(app)
 
@@ -301,7 +301,6 @@ class GetFriends(Resource):
                     })
                 else:
                     logger.warning(f"Skipping friend with id {f.friend_id}: user info not available")
-                    # Пропускаем друга, вместо сбоя
 
             return friend_list, 200
         except Exception as e:

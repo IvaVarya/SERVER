@@ -12,6 +12,7 @@ from flask_cors import CORS
 from minio import Minio
 from minio.error import S3Error
 import json
+from schemas import PostSchema
 
 app = Flask(__name__)
 
@@ -171,6 +172,7 @@ class CreatePost(Resource):
              description="Создаёт пост. Принимает JSON с полем 'text' или multipart/form-data с 'text' и 'photos'.")
     def post(self, user_id):
         try:
+            # Определяем данные в зависимости от типа запроса
             if request.content_type == 'application/json':
                 data = request.get_json() or {}
                 text = data.get('text', '')
@@ -179,10 +181,20 @@ class CreatePost(Resource):
                 text = request.form.get('text', '') if request.form else ''
                 files = request.files.getlist('photos') if request.files else []
 
+            # Валидация данных с помощью PostSchema
+            schema = PostSchema()
+            data_to_validate = {'text': text, 'photos': files}
+            errors = schema.validate(data_to_validate)
+            if errors:
+                logger.error(f"Ошибка валидации: {errors}")
+                return {'message': 'Ошибка валидации', 'errors': errors}, 400
+
+            # Создание поста
             post = Post(user_id=user_id, text=text)
             db.session.add(post)
             db.session.commit()
 
+            # Обработка фотографий
             if files:
                 for file in files:
                     if file and allowed_file(file.filename):
@@ -209,11 +221,19 @@ class CreatePost(Resource):
 
             db.session.commit()
             logger.info(f'Post created by user_id: {user_id}, post_id: {post.id}')
-            return {'message': 'Пост успешно создан!', 'post_id': post.id}, 201
+            return {
+                'message': 'Пост успешно создан!',
+                'post_id': post.id,
+                'text': post.text,
+                'photos': [
+                    {'id': p.id, 'filename': f"http://localhost:9000/{MINIO_BUCKET}/{p.filename}"}
+                    for p in post.photos
+                ]
+            }, 201
         except Exception as e:
             db.session.rollback()
             logger.error(f'Error creating post: {str(e)}')
-            return {'message': 'Ошибка сервера'}, 500
+            return {'message': 'Ошибка сервера', 'error': str(e)}, 500
 
 @api.route('/posts/<int:post_id>')
 class PostResource(Resource):

@@ -91,6 +91,7 @@ class FavoriteSet(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, nullable=False)
     set_id = db.Column(db.Integer, db.ForeignKey('sets.id'), nullable=False)
+    set = db.relationship('Set', backref='favorites')  # Добавляем связь
     added_at = db.Column(db.DateTime, default=db.func.current_timestamp())
 
     __table_args__ = (
@@ -178,7 +179,6 @@ favorite_model = api.model('Favorite', {
     'set_id': fields.Integer(required=True, description='ID набора для добавления в избранное')
 })
 
-# Эндпоинт для поиска наборов
 @api.route('/search')
 class SearchSets(Resource):
     @api.marshal_with(set_model, as_list=True)
@@ -187,24 +187,18 @@ class SearchSets(Resource):
         query = request.args.get('q', '').strip()
         if not query:
             return [], 200
-
-        # Разбиваем запрос на слова
         query_terms = query.split()
         filters = []
         for term in query_terms:
             try:
-                # Проверяем, является ли термин числом (для width и height)
                 num = int(term)
                 filters.append((Set.width == num) | (Set.height == num))
             except ValueError:
-                # Если не число, ищем в текстовых полях
                 filters.append(
                     (Set.name.ilike(f'%{term}%')) |
                     (Set.manufacturer.ilike(f'%{term}%')) |
                     (Set.category.ilike(f'%{term}%'))
                 )
-
-        # Комбинируем фильтры с AND
         if filters:
             query_filter = filters[0]
             for f in filters[1:]:
@@ -212,7 +206,6 @@ class SearchSets(Resource):
             sets = Set.query.filter(query_filter).all()
         else:
             sets = Set.query.all()
-
         return [{
             'id': s.id,
             'manufacturer': s.manufacturer,
@@ -224,7 +217,6 @@ class SearchSets(Resource):
             'photo': f"http://localhost:9000/{MINIO_BUCKET}/{s.photo}" if s.photo and not s.photo.startswith('http') else s.photo
         } for s in sets], 200
 
-# Эндпоинты для избранного
 @api.route('/favorites/add')
 class AddFavorite(Resource):
     @token_required
@@ -281,17 +273,27 @@ class GetFavorites(Resource):
     @api.doc(responses={200: 'Список избранных наборов', 401: 'Токен неверный'})
     def get(self, user_id):
         try:
-            favorites = FavoriteSet.query.filter_by(user_id=user_id).join(Set).all()
-            return [{
-                'id': f.set.id,
-                'manufacturer': f.set.manufacturer,
-                'name': f.set.name,
-                'category': f.set.category,
-                'description': f.set.description,
-                'width': f.set.width,
-                'height': f.set.height,
-                'photo': f"http://localhost:9000/{MINIO_BUCKET}/{f.set.photo}" if f.set.photo and not f.set.photo.startswith('http') else f.set.photo
-            } for f in favorites], 200
+            favorites = FavoriteSet.query.filter_by(user_id=user_id).all()
+            logger.info(f"Found {len(favorites)} favorite entries for user_id: {user_id}")
+
+            result = []
+            for f in favorites:
+                if f.set is None:
+                    logger.warning(f"No Set found for favorite with set_id: {f.set_id}, user_id: {user_id}")
+                    continue
+                set_data = {
+                    'id': f.set.id,
+                    'manufacturer': f.set.manufacturer,
+                    'name': f.set.name,
+                    'category': f.set.category,
+                    'description': f.set.description,
+                    'width': f.set.width,
+                    'height': f.set.height,
+                    'photo': f"http://localhost:9000/{MINIO_BUCKET}/{f.set.photo}" if f.set.photo and not f.set.photo.startswith('http') else f.set.photo
+                }
+                result.append(set_data)
+            logger.info(f"Returning {len(result)} favorite sets for user_id: {user_id}")
+            return result, 200
         except Exception as e:
             logger.error(f'Error getting favorites: {str(e)}', exc_info=True)
             return {'message': 'Ошибка сервера', 'error': str(e)}, 500
